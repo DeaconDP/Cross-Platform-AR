@@ -1,0 +1,11 @@
+{
+  "appId": "io.worldbuild.cubear",
+  "appName": "Cube AR",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "Cube AR",
+  "short_name": "Cube AR",
+  "description": "Tap to place a 3D cube in your room. WebXR on Android, AR Quick Look on iOS.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

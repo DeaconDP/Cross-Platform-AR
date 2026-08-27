@@ -1,0 +1,29 @@
+{
+  "name": "cross-platform-ar",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "cap:sync": "npm run build && npx cap sync",
+    "cap:android": "npm run cap:sync && npx cap open android",
+    "cap:ios": "npm run cap:sync && npx cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/browser": "^7.0.2",
+    "@capacitor/core": "^7.4.3",
+    "@capacitor/ios": "^7.4.3",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.3",
+    "@types/three": "^0.185.4",
+    "@types/webxr": "^0.5.24",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  }
+}

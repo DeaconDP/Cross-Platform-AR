@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b0d10" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <title>Cube AR — tap to place a cube in your room</title>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="brand">
+        <h1>Cube<em>AR</em></h1>
+        <p class="tagline">Tap to place a cube in your room.</p>
+      </header>
+
+      <div id="preview" class="preview" aria-label="3D preview of the cube"></div>
+
+      <footer class="actions">
+        <button id="cta" class="cta" hidden>Start AR</button>
+        <a id="cta-quicklook" class="cta" hidden aria-disabled="true">
+          <img src="/icon.svg" alt="" width="20" height="20" />
+          <span id="cta-quicklook-label">Preparing AR&hellip;</span>
+        </a>
+        <p id="status" class="status" role="status">Checking AR support&hellip;</p>
+      </footer>
+    </main>
+
+    <!-- WebXR dom-overlay chrome (Android AR session) -->
+    <div id="ar-overlay" hidden>
+      <div class="ar-chip"><span id="cube-count">0</span> placed</div>
+      <p id="ar-hint" class="ar-hint"></p>
+      <button id="exit-ar" class="ar-exit">Exit AR</button>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

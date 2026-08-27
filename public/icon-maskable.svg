@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0b0d10"/>
+  <!-- isometric cube, inset for maskable safe zone -->
+  <g stroke-linejoin="round" stroke-width="12">
+    <polygon points="256,136 364,196 256,256 148,196" fill="#5ee38a" stroke="#5ee38a"/>
+    <polygon points="148,196 256,256 256,376 148,316" fill="#30d158" stroke="#30d158"/>
+    <polygon points="364,196 256,256 256,376 364,316" fill="#1e9e41" stroke="#1e9e41"/>
+  </g>
+</svg>
