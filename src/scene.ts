@@ -6,6 +6,9 @@ export const CUBE_SIZE = 0.12;
 
 const ACCENT = 0x30d158;
 
+/** Shared accent for native AR bridges (ARKit / ARCore). */
+export const CUBE_COLOR_HEX = "#30d158";
+
 /**
  * The one cube definition shared by every path:
  * WebXR placement (Android), USDZ export (iOS Quick Look), and the inline preview.
@@ -36,7 +39,16 @@ export function createLights(): THREE.Group {
  * Inline 3D preview: the landing screen's visual anchor and the fallback
  * experience for browsers with no AR path. Orbit to inspect the cube.
  */
+let activePreviewStop: (() => void) | null = null;
+
+/** Stop the inline WebGL preview so native AR can own the GPU context. */
+export function stopPreview(): void {
+  activePreviewStop?.();
+  activePreviewStop = null;
+}
+
 export function startPreview(container: HTMLElement): void {
+  stopPreview();
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(container.clientWidth, container.clientHeight);
@@ -77,4 +89,11 @@ export function startPreview(container: HTMLElement): void {
     controls.update();
     renderer.render(scene, camera);
   });
+
+  activePreviewStop = () => {
+    renderer.setAnimationLoop(null);
+    controls.dispose();
+    renderer.dispose();
+    container.replaceChildren();
+  };
 }

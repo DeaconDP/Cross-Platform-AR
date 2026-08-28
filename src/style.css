@@ -81,6 +81,55 @@ body {
   gap: 12px;
 }
 
+.path-list {
+  display: grid;
+  gap: 10px;
+}
+
+.path-row {
+  display: grid;
+  gap: 8px;
+}
+
+.path-meta {
+  display: grid;
+  gap: 2px;
+}
+
+.path-tag {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.path-detail {
+  font-size: 0.875rem;
+  color: var(--text-dim);
+  text-wrap: balance;
+}
+
+.cta-secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+body.ar-native-active {
+  background: transparent !important;
+}
+
+body.ar-native-active .shell,
+body.ar-native-active .preview {
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.ar-native-active #ar-overlay {
+  pointer-events: none;
+}
+
 .cta {
   display: flex;
   align-items: center;
@@ -187,4 +236,522 @@ body {
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
+}
+
+.ar-debug-toggle {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 16px);
+  right: 16px;
+  z-index: 4;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(11, 13, 16, 0.65);
+  backdrop-filter: blur(8px);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    border-color 180ms ease,
+    color 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease;
+}
+
+.ar-debug-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ar-debug-toggle[aria-pressed="true"] {
+  border-color: rgba(48, 209, 88, 0.7);
+  color: var(--accent);
+  background: rgba(11, 13, 16, 0.82);
+  box-shadow:
+    0 0 0 1px rgba(48, 209, 88, 0.2),
+    0 0 18px rgba(48, 209, 88, 0.28);
+}
+
+/* ---- Tactical AR debug visor ---- */
+
+.ar-debug-hud-root {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.ar-debug-hud-root[hidden] {
+  display: none;
+}
+
+.ar-debug-hud {
+  --hud-glass: rgba(11, 13, 16, 0.72);
+  --hud-line: rgba(48, 209, 88, 0.28);
+  --hud-line-strong: rgba(48, 209, 88, 0.55);
+  --hud-glow: rgba(48, 209, 88, 0.22);
+  --hud-mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  --hud-edge: 4px;
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: var(--hud-mono);
+  color: var(--text);
+}
+
+.ar-debug-frame {
+  position: absolute;
+  inset: calc(env(safe-area-inset-top, 0px) + 48px) var(--hud-edge)
+    calc(env(safe-area-inset-bottom, 0px) + 72px);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.ar-debug-bracket {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-color: var(--hud-line-strong);
+  border-style: solid;
+  border-width: 0;
+  opacity: 0.8;
+  filter: drop-shadow(0 0 4px var(--hud-glow));
+}
+
+.ar-debug-bracket--tl {
+  top: 0;
+  left: 0;
+  border-top-width: 1.5px;
+  border-left-width: 1.5px;
+}
+
+.ar-debug-bracket--tr {
+  top: 0;
+  right: 0;
+  border-top-width: 1.5px;
+  border-right-width: 1.5px;
+}
+
+.ar-debug-bracket--bl {
+  bottom: 0;
+  left: 0;
+  border-bottom-width: 1.5px;
+  border-left-width: 1.5px;
+}
+
+.ar-debug-bracket--br {
+  bottom: 0;
+  right: 0;
+  border-bottom-width: 1.5px;
+  border-right-width: 1.5px;
+}
+
+.ar-debug-scan {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(48, 209, 88, 0.05) 20%,
+    rgba(48, 209, 88, 0.55) 50%,
+    rgba(48, 209, 88, 0.05) 80%,
+    transparent 100%
+  );
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ar-debug-hud[data-enter="true"] .ar-debug-scan {
+  animation: ar-debug-scan 380ms ease-out forwards;
+}
+
+.ar-debug-rail {
+  position: absolute;
+  left: var(--hud-edge);
+  right: var(--hud-edge);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--hud-line);
+  border-radius: 6px;
+  background: var(--hud-glass);
+  backdrop-filter: blur(12px) saturate(1.2);
+  box-shadow:
+    inset 0 1px 0 rgba(48, 209, 88, 0.12),
+    0 0 16px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+.ar-debug-rail--top {
+  top: calc(env(safe-area-inset-top, 0px) + 52px);
+  justify-content: space-between;
+}
+
+.ar-debug-rail--bottom {
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 80px);
+  padding: 3px 6px;
+  overflow: hidden;
+}
+
+.ar-debug-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.ar-debug-hero__label {
+  font-size: 0.42rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.ar-debug-hero__value {
+  font-size: clamp(0.95rem, 3.8vw, 1.15rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--accent);
+  text-shadow: 0 0 8px var(--hud-glow);
+  font-variant-numeric: tabular-nums;
+}
+
+.ar-debug-hero--warn .ar-debug-hero__value {
+  color: var(--warn);
+  text-shadow: 0 0 8px rgba(255, 69, 58, 0.35);
+}
+
+.ar-debug-hero--dim .ar-debug-hero__value {
+  color: var(--text-dim);
+  text-shadow: none;
+}
+
+.ar-debug-hero--live .ar-debug-hero__value {
+  animation: ar-debug-pulse 2.4s ease-in-out infinite;
+}
+
+.ar-debug-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ar-debug-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  max-width: 100%;
+  padding: 1px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.45rem;
+  line-height: 1.25;
+}
+
+.ar-debug-chip__label {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.ar-debug-chip__value {
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-all;
+  font-variant-numeric: tabular-nums;
+}
+
+.ar-debug-chip--live {
+  border-color: rgba(48, 209, 88, 0.35);
+  box-shadow: 0 0 6px rgba(48, 209, 88, 0.1);
+}
+
+.ar-debug-chip--live .ar-debug-chip__value {
+  color: var(--accent);
+}
+
+.ar-debug-chip--warn {
+  border-color: rgba(255, 69, 58, 0.4);
+}
+
+.ar-debug-chip--warn .ar-debug-chip__value {
+  color: var(--warn);
+}
+
+.ar-debug-chip--dim .ar-debug-chip__value {
+  color: var(--text-dim);
+}
+
+.ar-debug-col {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 92px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 112px);
+  width: min(34vw, 124px);
+  max-height: min(56vh, 360px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 5px 6px;
+  border: 1px solid var(--hud-line);
+  border-radius: 6px;
+  background: var(--hud-glass);
+  backdrop-filter: blur(12px) saturate(1.2);
+  box-shadow:
+    inset 0 1px 0 rgba(48, 209, 88, 0.1),
+    0 0 14px rgba(0, 0, 0, 0.28);
+  font-size: 0.48rem;
+  line-height: 1.3;
+  pointer-events: auto;
+  scrollbar-width: none;
+}
+
+.ar-debug-col::-webkit-scrollbar {
+  display: none;
+}
+
+.ar-debug-col--left {
+  left: var(--hud-edge);
+}
+
+.ar-debug-col--right {
+  right: var(--hud-edge);
+}
+
+.ar-debug-section + .ar-debug-section {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(48, 209, 88, 0.14);
+}
+
+.ar-debug-section h3 {
+  margin-bottom: 3px;
+  font-size: 0.42rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.ar-debug-section dl {
+  display: grid;
+  gap: 1px;
+}
+
+.ar-debug-row {
+  display: grid;
+  grid-template-columns: minmax(0, 40%) minmax(0, 1fr);
+  gap: 3px;
+  min-width: 0;
+}
+
+.ar-debug-row dt {
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+.ar-debug-row dd {
+  margin: 0;
+  word-break: break-all;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ar-debug-ticker {
+  list-style: none;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.45rem;
+  line-height: 1.25;
+  color: var(--text-dim);
+}
+
+.ar-debug-ticker li {
+  flex: 0 0 auto;
+  max-width: 70vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 8px;
+  border-left: 1px solid rgba(48, 209, 88, 0.25);
+  color: var(--text);
+}
+
+.ar-debug-ticker li:first-child {
+  padding-left: 0;
+  border-left: 0;
+  color: var(--accent);
+}
+
+.ar-debug-ticker--empty {
+  font-size: 0.45rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* Enter motion */
+.ar-debug-hud[data-enter="true"] .ar-debug-rail--top {
+  animation: ar-debug-slide-top 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.ar-debug-hud[data-enter="true"] .ar-debug-rail--bottom {
+  animation: ar-debug-slide-bottom 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.ar-debug-hud[data-enter="true"] .ar-debug-col--left {
+  animation: ar-debug-slide-left 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.ar-debug-hud[data-enter="true"] .ar-debug-col--right {
+  animation: ar-debug-slide-right 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.ar-debug-hud[data-enter="true"] .ar-debug-bracket {
+  animation: ar-debug-brackets-in 320ms ease-out both;
+}
+
+@keyframes ar-debug-slide-top {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ar-debug-slide-bottom {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ar-debug-slide-left {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes ar-debug-slide-right {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes ar-debug-brackets-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+}
+
+@keyframes ar-debug-scan {
+  0% {
+    opacity: 0;
+    transform: translateY(0);
+  }
+  12% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(min(56vh, 360px));
+  }
+}
+
+@keyframes ar-debug-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.72;
+  }
+}
+
+@media (max-width: 390px) {
+  .ar-debug-hud {
+    --hud-edge: 3px;
+  }
+
+  .ar-debug-col {
+    width: min(32vw, 112px);
+    padding: 4px 5px;
+    font-size: 0.44rem;
+  }
+
+  .ar-debug-rail--top {
+    flex-wrap: wrap;
+  }
+
+  .ar-debug-hero__value {
+    font-size: 0.9rem;
+  }
+
+  .ar-debug-chips {
+    justify-content: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ar-debug-toggle {
+    transition: none;
+  }
+
+  .ar-debug-hud[data-enter="true"] .ar-debug-rail--top,
+  .ar-debug-hud[data-enter="true"] .ar-debug-rail--bottom,
+  .ar-debug-hud[data-enter="true"] .ar-debug-col--left,
+  .ar-debug-hud[data-enter="true"] .ar-debug-col--right,
+  .ar-debug-hud[data-enter="true"] .ar-debug-bracket,
+  .ar-debug-hud[data-enter="true"] .ar-debug-scan,
+  .ar-debug-hero--live .ar-debug-hero__value {
+    animation: none;
+  }
+
+  .ar-debug-hud[data-enter="true"] .ar-debug-scan {
+    opacity: 0;
+  }
 }

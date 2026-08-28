@@ -1,9 +1,14 @@
 node_modules/
-dist/
+/dist/
 *.local
 .env
 .env.*
 !.env.example
+.cursor/
+*.class
+
+# Local Capacitor plugin Android build outputs
+plugins/*/android/build/
 
 # Capacitor / Android
 android/.gradle/

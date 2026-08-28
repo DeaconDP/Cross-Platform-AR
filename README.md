@@ -2,14 +2,24 @@
 
 Cross-platform Augmented Reality demo: tap to place a 3D cube in your room. One PWA codebase, optional Capacitor shells for iOS/Android packaging.
 
-| Platform | How it works |
-| --- | --- |
-| Android (Chrome) | WebXR `immersive-ar` + hit-testing — a reticle tracks real surfaces, every tap places a cube |
-| Android (Capacitor app) | System WebView **cannot** run WebXR AR — CTA opens the HTTPS experience in Chrome Custom Tabs |
-| iPhone / iPad (Safari or Cap) | AR Quick Look — the same cube is exported to USDZ at runtime and opened in Apple's native AR viewer |
-| Desktop / other | Inline 3D preview with orbit controls |
+This project is a **showcase of cross-platform AR options** — every supported path is listed on the landing screen with a short label explaining how it works.
 
-iOS Safari has no WebXR AR support, so the Quick Look path is the standard cross-platform pattern.
+## AR paths explained
+
+| Path | Where | How it works |
+| --- | --- | --- |
+| **Native · ARKit** | Capacitor iOS app | In-app ARKit session via a Capacitor plugin — camera + plane detection + tap-to-place without leaving the app |
+| **Native · ARCore** | Capacitor Android app | In-app ARCore session (SceneView) — same tap-to-place flow inside the app shell |
+| **WebXR · Chrome** | Android Chrome (browser or after Chrome handoff) | WebXR `immersive-ar` + hit-testing — reticle tracks surfaces, taps place cubes |
+| **WebXR · Chrome handoff** | Capacitor Android app | System WebView **cannot** run WebXR AR — opens the HTTPS PWA in Chrome Custom Tabs for the WebXR path |
+| **Quick Look · USDZ** | iPhone / iPad Safari or Cap shell | Runtime USDZ export via three.js — opens Apple's native AR Quick Look viewer |
+| **Inline preview** | Desktop / any browser | Orbit-controls 3D preview of the same cube definition |
+
+### Why so many paths?
+
+- **iOS Safari** has no WebXR AR — Quick Look (USDZ) is the standard web fallback; native ARKit adds a true in-app session in the Cap shell.
+- **Android System WebView** has no `immersive-ar` — Chrome supports WebXR; the Cap shell offers native ARCore *and* a Chrome handoff for the web path.
+- **One cube definition** in `src/scene.ts` feeds WebXR, USDZ export, and native placement params.
 
 ## Run (PWA / browser)
 
@@ -24,22 +34,24 @@ The app runs at **https://localhost:5188** (sticky port, strict — it will not 
 1. Start the dev server (`run.bat` / `run.command`). Vite prints a `Network:` URL like `https://192.168.x.x:5188`.
 2. Make sure the phone is on the same Wi-Fi network (and the OS firewall allows Node on port 5188).
 3. Open that URL on the phone and accept the self-signed certificate warning (Advanced → Proceed).
-4. **Android:** tap **Start AR**, allow camera access, sweep the phone across a floor or table until the green reticle appears, then tap to place cubes. Requires an [ARCore-capable device](https://developers.google.com/ar/devices).
-5. **iPhone:** tap **View in AR** — AR Quick Look opens; move the phone to find a surface and the cube places itself (drag to reposition, pinch to scale).
+4. **Android Chrome:** tap **Start WebXR AR**, allow camera, sweep until the green reticle appears, tap to place cubes. Requires an [ARCore-capable device](https://developers.google.com/ar/devices).
+5. **iPhone Safari:** tap **View in AR** — AR Quick Look opens; move the phone to find a surface.
 
 ### Desktop testing of the Android path
 
-Chrome's [Immersive Web Emulator](https://chromewebstore.google.com/detail/immersive-web-emulator/cgffilbpcibhmcfbgggfhfolhkfbhmik) extension can fake an `immersive-ar` session with synthetic hit-tests, useful for smoke-testing the session flow without a phone.
+Chrome's [Immersive Web Emulator](https://chromewebstore.google.com/detail/immersive-web-emulator/cgffilbpcibhmcfbgggfhfolhkfbhmik) extension can fake an `immersive-ar` session with synthetic hit-tests.
 
 ## Capacitor (native shells)
 
-Native projects live in `android/` and `ios/`. Web assets come from `dist/` (`webDir`).
+Native projects live in `android/` and `ios/`. Web assets come from `dist/` (`webDir`). The local **`cube-ar`** Capacitor plugin (`plugins/cube-ar/`) provides native ARKit/ARCore tap-to-place.
 
 ```bash
-npm run cap:sync      # build + cap sync
+npm run cap:sync      # build plugin + web + cap sync
 npm run cap:android   # sync + open Android Studio
 npm run cap:ios       # sync + open Xcode (macOS only)
 ```
+
+On device, the landing screen lists **all paths available on that platform** — typically Native AR + Quick Look on iOS, Native AR + Chrome handoff on Android Cap.
 
 ### Env for Android → Chrome handoff
 
@@ -49,30 +61,34 @@ Copy [`.env.example`](.env.example) to `.env` and set:
 VITE_AR_ORIGIN=https://192.168.x.x:5188
 ```
 
-Use your LAN HTTPS URL while developing, or the public HTTPS URL once deployed. The Capacitor Android shell opens that origin in Chrome because WebXR `immersive-ar` is not available in Android System WebView.
+Use your LAN HTTPS URL while developing, or the public HTTPS URL once deployed.
 
 ### Native permissions
 
 | Platform | Declared | Purpose |
 | --- | --- | --- |
-| Android | `CAMERA` | Camera access for AR (Chrome / future WebView use) |
-| Android | `camera` / `camera.ar` features (`required=false`) | Play Store device filtering without excluding non-AR phones |
+| Android | `CAMERA` | Native ARCore + Chrome handoff |
+| Android | `camera.ar` feature (`required=false`) | ARCore-capable devices |
 | Android | `com.google.ar.core` = `optional` | ARCore when present |
-| iOS | `NSCameraUsageDescription` | Camera for AR placement |
-| iOS | `NSMicrophoneUsageDescription` | Required for WebView camera APIs on iOS; app does not record audio |
-
-No photo library, location, or storage permissions.
+| iOS | `NSCameraUsageDescription` | Native ARKit + Quick Look |
+| iOS | `NSMicrophoneUsageDescription` | WebView camera APIs; app does not record audio |
 
 ### iOS signing
 
-In Xcode → **Signing & Capabilities**, select the Apple Developer team for **d@worldbuild.io** (not a personal free team). Set `DEVELOPMENT_TEAM` on the App target accordingly. Building/running the iOS app requires a Mac with Xcode and CocoaPods (`pod install` under `ios/App` after sync).
+In Xcode → **Signing & Capabilities**, select the Apple Developer team for **d@worldbuild.io**. Building/running the iOS app requires a Mac with Xcode and CocoaPods (`pod install` under `ios/App` after sync).
+
+## Documentation
+
+- [`docs/arcore-c-api.md`](docs/arcore-c-api.md) — how the ARCore Android NDK (C) API relates to our Kotlin/SceneView native path (same runtime, different binding layer)
 
 ## Project layout
 
-- `src/main.ts` — capability detection, routes WebXR / Quick Look / Android Chrome handoff
-- `src/scene.ts` — the shared cube definition + inline preview
-- `src/ar-webxr.ts` — Android WebXR session (hit-test reticle, tap to place, DOM overlay)
+- `src/main.ts` — capability probe + multi-path showcase landing
+- `src/scene.ts` — shared cube definition + inline preview
+- `src/ar-native.ts` — Capacitor native AR session (ARKit / ARCore)
+- `src/ar-webxr.ts` — WebXR session (hit-test reticle, tap to place)
 - `src/ar-quicklook.ts` — iOS USDZ export + Quick Look launch
-- `public/` — PWA manifest, icons, service worker (offline shell cache, production browser only)
-- `capacitor.config.json` — Cap app id `io.worldbuild.cubear`, `webDir: dist`, HTTPS Android scheme
-- `android/` / `ios/` — native shells + permission strings
+- `src/ar-debug.ts` — session debug overlay (WebXR + native)
+- `plugins/cube-ar/` — local Capacitor plugin (Swift + Kotlin); Android ARCore API map in [`plugins/cube-ar/android/ARCORE_API.md`](plugins/cube-ar/android/ARCORE_API.md)
+- `public/` — PWA manifest, icons, service worker
+- `android/` / `ios/` — Capacitor shells

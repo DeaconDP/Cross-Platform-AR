@@ -3,6 +3,8 @@
 
     <!-- Camera / AR: WebXR runs in Chrome; Cap shell may still need CAMERA declared. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Required for ARCore IMU sampling; also unlocks Samsung One UI 8 sensor HAL workaround -->
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.ar" android:required="false" />
 

@@ -24,11 +24,7 @@
       <div id="preview" class="preview" aria-label="3D preview of the cube"></div>
 
       <footer class="actions">
-        <button id="cta" class="cta" hidden>Start AR</button>
-        <a id="cta-quicklook" class="cta" hidden aria-disabled="true">
-          <img src="/icon.svg" alt="" width="20" height="20" />
-          <span id="cta-quicklook-label">Preparing AR&hellip;</span>
-        </a>
+        <div id="ar-paths" class="path-list" aria-label="Available AR paths"></div>
         <p id="status" class="status" role="status">Checking AR support&hellip;</p>
       </footer>
     </main>
@@ -36,6 +32,10 @@
     <!-- WebXR dom-overlay chrome (Android AR session) -->
     <div id="ar-overlay" hidden>
       <div class="ar-chip"><span id="cube-count">0</span> placed</div>
+      <button id="debug-toggle" class="ar-debug-toggle" type="button" aria-pressed="false">
+        Debug
+      </button>
+      <div id="debug-panel" class="ar-debug-hud-root" hidden aria-live="polite"></div>
       <p id="ar-hint" class="ar-hint"></p>
       <button id="exit-ar" class="ar-exit">Exit AR</button>
     </div>

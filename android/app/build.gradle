@@ -3,6 +3,7 @@ apply plugin: 'com.android.application'
 android {
     namespace "io.worldbuild.cubear"
     compileSdk rootProject.ext.compileSdkVersion
+    experimentalProperties["android.nativeLibraryAlignmentPageSize"] = "16k"
     defaultConfig {
         applicationId "io.worldbuild.cubear"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -20,6 +21,11 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
         }
     }
 }

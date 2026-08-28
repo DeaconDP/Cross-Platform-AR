@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "rootDir": "src",
+    "declaration": true,
+    "declarationDir": "dist/esm",
+    "outDir": "dist/esm",
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}

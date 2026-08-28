@@ -1,0 +1,36 @@
+{
+  "name": "cube-ar",
+  "version": "0.1.0",
+  "description": "Native ARKit/ARCore tap-to-place for Cube AR",
+  "main": "dist/esm/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "dist/",
+    "ios/Sources",
+    "CubeAr.podspec"
+  ],
+  "author": "worldbuild",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/core": "^7.4.3",
+    "typescript": "^7.0.2"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  }
+}
