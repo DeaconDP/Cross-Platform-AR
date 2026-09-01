@@ -20,6 +20,7 @@ export interface CubeARTapOptions {
 export interface CubeARTapResult {
   placed: boolean;
   count: number;
+  queued?: boolean;
 }
 
 export interface CubeARTrackingEvent {
@@ -35,6 +36,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "placed",
+    listenerFunc: (event: { count: number }) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     eventName: "sessionEnded",
