@@ -7,6 +7,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { probeArAvailability, withArStartRetry } from "./ar-start";
 import type { OverlayElements } from "./ar-webxr";
 
 /** Map native plugin rejection messages to actionable user guidance. */
@@ -57,8 +58,15 @@ export async function isNativeARSupported(): Promise<{
     return { supported: false, backend: "none" };
   }
   try {
-    const result = await CubeAR.isSupported();
-    return { supported: result.supported, backend: result.backend };
+    let last: { supported: boolean; backend: "arkit" | "arcore" | "none" } = {
+      supported: false,
+      backend: "none",
+    };
+    const avail = await probeArAvailability(async () => {
+      last = await CubeAR.isSupported();
+      return last;
+    });
+    return { supported: avail.available, backend: last.backend };
   } catch {
     return { supported: false, backend: "none" };
   }
@@ -146,10 +154,12 @@ export async function startNativeAR(
 
   try {
     stopPreview();
-    await CubeAR.startSession({
-      cubeSizeM: CUBE_SIZE,
-      colorHex: CUBE_COLOR_HEX,
-    });
+    await withArStartRetry(() =>
+      CubeAR.startSession({
+        cubeSizeM: CUBE_SIZE,
+        colorHex: CUBE_COLOR_HEX,
+      }),
+    );
     document.body.classList.add("ar-native-active");
     overlay.root.hidden = false;
     await sessionEnded;

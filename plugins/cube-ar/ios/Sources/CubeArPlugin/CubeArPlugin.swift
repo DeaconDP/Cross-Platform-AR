@@ -26,12 +26,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve([
             "supported": supported,
             "backend": supported ? "arkit" : "none",
+            "reason": supported ? "supported" : "unsupported",
         ])
     }
 
     @objc func startSession(_ call: CAPPluginCall) {
         guard ARWorldTrackingConfiguration.isSupported else {
-            call.reject("ARKit is not supported on this device")
+            call.reject("ARKit is not supported on this device", "unsupported")
             return
         }
 
@@ -48,7 +49,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve()
             } catch {
                 self.detachArView()
-                call.reject("Failed to start native AR: \(error.localizedDescription)")
+                call.reject("Failed to start native AR: \(error.localizedDescription)", "failed")
             }
         }
     }
@@ -101,12 +102,46 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             webView.insertSubview(view, at: 0)
         }
 
-        let config = ARWorldTrackingConfiguration()
-        config.planeDetection = [.horizontal]
-        view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        view.session.run(trackingConfig(), options: [.resetTracking, .removeExistingAnchors])
 
         addReticle(to: view)
         arView = view
+        watchAppLifecycle()
+    }
+
+    private func trackingConfig() -> ARWorldTrackingConfiguration {
+        let config = ARWorldTrackingConfiguration()
+        config.planeDetection = [.horizontal]
+        return config
+    }
+
+    private var bgObs: NSObjectProtocol?
+    private var fgObs: NSObjectProtocol?
+
+    private func watchAppLifecycle() {
+        unwatchAppLifecycle()
+        bgObs = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.arView?.session.pause()
+        }
+        fgObs = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, let view = self.arView else { return }
+            view.session.run(self.trackingConfig())
+        }
+    }
+
+    private func unwatchAppLifecycle() {
+        if let bgObs { NotificationCenter.default.removeObserver(bgObs) }
+        if let fgObs { NotificationCenter.default.removeObserver(fgObs) }
+        bgObs = nil
+        fgObs = nil
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +155,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        unwatchAppLifecycle()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
