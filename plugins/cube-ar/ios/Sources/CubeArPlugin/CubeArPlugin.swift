@@ -20,6 +20,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var hasQueuedTap = false
+    private var queuedTapX: Float = 0
+    private var queuedTapY: Float = 0
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -39,6 +42,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         cubeColorHex = call.getString("colorHex") ?? "#30d158"
         placedCount = 0
         surfaceFound = false
+        hasQueuedTap = false
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -74,7 +78,14 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             }
 
             let placed = self.placeCube(at: CGPoint(x: CGFloat(x), y: CGFloat(y)), in: view)
-            call.resolve(["placed": placed, "count": self.placedCount])
+            if placed {
+                self.hasQueuedTap = false
+            } else {
+                self.hasQueuedTap = true
+                self.queuedTapX = x
+                self.queuedTapY = y
+            }
+            call.resolve(["placed": placed, "count": self.placedCount, "queued": !placed])
         }
     }
 
@@ -120,6 +131,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        hasQueuedTap = false
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
@@ -176,6 +188,15 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             surfaceFound = true
             notifyTracking(state: "ready", message: "Tap to place a cube")
         }
+        flushQueuedTap(in: view)
+    }
+
+    private func flushQueuedTap(in view: ARSCNView) {
+        guard hasQueuedTap else { return }
+        let point = CGPoint(x: CGFloat(queuedTapX), y: CGFloat(queuedTapY))
+        guard placeCube(at: point, in: view) else { return }
+        hasQueuedTap = false
+        notifyListeners("placed", data: ["count": placedCount])
     }
 
     private func notifyTracking(state: String, message: String? = nil) {

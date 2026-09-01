@@ -59,6 +59,9 @@ class CubeArPlugin : Plugin() {
     private var placedCount = 0
     private var reticleNode: CubeNode? = null
     private var surfaceFound = false
+    private var hasQueuedTap = false
+    private var queuedTapX = 0f
+    private var queuedTapY = 0f
     private var pendingStartCall: PluginCall? = null
     private var sessionFrameReceived = false
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -214,9 +217,17 @@ class CubeArPlugin : Plugin() {
             }
 
             val placed = placeCubeAtScreen(x, y, view)
+            if (placed) {
+                hasQueuedTap = false
+            } else {
+                hasQueuedTap = true
+                queuedTapX = x
+                queuedTapY = y
+            }
             val result = JSObject()
             result.put("placed", placed)
             result.put("count", placedCount)
+            result.put("queued", !placed)
             call.resolve(result)
         }
     }
@@ -559,6 +570,12 @@ class CubeArPlugin : Plugin() {
                 surfaceFound = true
                 notifyTracking("ready", "Tap to place a cube")
             }
+            if (hasQueuedTap && placeCubeAtScreen(queuedTapX, queuedTapY, sceneView)) {
+                hasQueuedTap = false
+                val payload = JSObject()
+                payload.put("count", placedCount)
+                notifyListeners("placed", payload)
+            }
         } else {
             reticle.isVisible = false
         }
@@ -626,6 +643,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        hasQueuedTap = false
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

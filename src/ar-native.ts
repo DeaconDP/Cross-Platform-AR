@@ -106,6 +106,14 @@ export async function startNativeAR(
     }
   });
 
+  const placedListener = await CubeAR.addListener("placed", (event) => {
+    if (typeof event.count !== "number") return;
+    placed = event.count;
+    overlay.count.textContent = String(placed);
+    overlay.hint.hidden = true;
+    debug.logEvent(`cube placed (#${placed})`);
+  });
+
   const sessionEnded = new Promise<void>((resolve) => {
     void CubeAR.addListener("sessionEnded", () => resolve());
   });
@@ -126,6 +134,10 @@ export async function startNativeAR(
         overlay.count.textContent = String(placed);
         overlay.hint.hidden = true;
         debug.logEvent(`cube placed (#${placed})`);
+      } else if (result.queued) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = "Hold still — placing when a surface is found";
+        debug.logEvent("tap queued until a surface is found");
       }
     } catch {
       debug.logEvent("tap failed");
@@ -158,6 +170,7 @@ export async function startNativeAR(
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
+    placedListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();

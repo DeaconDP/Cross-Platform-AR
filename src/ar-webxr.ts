@@ -72,12 +72,13 @@ export async function startWebXR(
   const unbindSession = debug.bindSession(session);
 
   let placed = 0;
+  let pendingPlace = false;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
-  session.addEventListener("select", () => {
-    if (!reticle.visible) return;
+  const placeOnReticle = () => {
+    if (!reticle.visible) return false;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
     cube.rotateY(Math.random() * Math.PI * 2);
@@ -86,6 +87,17 @@ export async function startWebXR(
     overlay.count.textContent = String(placed);
     overlay.hint.hidden = true;
     debug.logEvent(`cube placed (#${placed})`);
+    return true;
+  };
+
+  session.addEventListener("select", () => {
+    if (placeOnReticle()) {
+      pendingPlace = false;
+      return;
+    }
+    pendingPlace = true;
+    overlay.hint.hidden = false;
+    overlay.hint.textContent = "Hold still — placing when a surface is found";
   });
 
   const onExit = () => session.end();
@@ -124,7 +136,10 @@ export async function startWebXR(
           if (!surfaceFound) {
             surfaceFound = true;
             debug.logEvent("surface found");
-            if (placed === 0) overlay.hint.textContent = "Tap to place a cube";
+            if (placed === 0 && !pendingPlace) overlay.hint.textContent = "Tap to place a cube";
+          }
+          if (pendingPlace && placeOnReticle()) {
+            pendingPlace = false;
           }
         }
       } else {
