@@ -29,6 +29,9 @@ export function nativeARErrorMessage(err: unknown): string {
   if (/arcore is not supported/i.test(msg)) {
     return "ARCore is not supported on this device.";
   }
+  if (/register sensor to queue|Failed to register sensor/i.test(msg)) {
+    return "Native AR couldn't start the camera sensors. Force-stop the app and try again.";
+  }
   if (/register before|LifecycleOwner|attempting to register while current state is RESUMED/i.test(msg)) {
     return "Native AR couldn't initialize the camera session. Force-stop the app and try again.";
   }
