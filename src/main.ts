@@ -4,7 +4,13 @@ import { Browser } from "@capacitor/browser";
 import { startPreview } from "./scene";
 import { isWebXRSupported, startWebXR } from "./ar-webxr";
 import { isQuickLookSupported, prepareQuickLook } from "./ar-quicklook";
-import { isNativeARSupported, nativeARErrorMessage, startNativeAR } from "./ar-native";
+import {
+  isCameraDenied,
+  isNativeARSupported,
+  nativeARErrorMessage,
+  openArSettings,
+  startNativeAR,
+} from "./ar-native";
 import { buildCompatSnapshot } from "./ar-debug";
 
 const $ = <T extends HTMLElement>(id: string): T =>
@@ -23,9 +29,26 @@ const overlay = {
 
 startPreview($("preview"));
 
-function setStatus(text: string, isError = false): void {
+function setStatus(text: string, isError = false, offerSettings = false): void {
   status.textContent = text;
   status.classList.toggle("error", isError);
+  let btn = document.getElementById("open-ar-settings") as HTMLButtonElement | null;
+  if (!offerSettings) {
+    btn?.remove();
+    return;
+  }
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.id = "open-ar-settings";
+    btn.type = "button";
+    btn.className = "cta cta-secondary";
+    btn.textContent = "Open Settings";
+    btn.addEventListener("click", () => {
+      btn!.setAttribute("aria-busy", "true");
+      void openArSettings().finally(() => btn?.removeAttribute("aria-busy"));
+    });
+    status.after(btn);
+  }
 }
 
 function arChromeOrigin(): string | null {
@@ -137,7 +160,7 @@ async function init(): Promise<void> {
             await startNativeAR(overlay, snapshot);
             setStatus("Native AR session ended \u2014 pick another path anytime.");
           } catch (err) {
-            setStatus(nativeARErrorMessage(err), true);
+            setStatus(nativeARErrorMessage(err), true, isCameraDenied(err));
           } finally {
             overlay.root.hidden = true;
             resetPathButton("native", "Start native AR");

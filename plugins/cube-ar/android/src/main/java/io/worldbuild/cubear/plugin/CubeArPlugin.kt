@@ -2,6 +2,9 @@ package io.worldbuild.cubear.plugin
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -111,7 +114,26 @@ class CubeArPlugin : Plugin() {
         if (getPermissionState("camera") == PermissionState.GRANTED) {
             ensureArCoreAndBeginSession(call)
         } else {
-            call.reject("Camera permission denied")
+            rejectCamera(call)
+        }
+    }
+
+    private fun rejectCamera(call: PluginCall) {
+        val data = JSObject()
+        data.put("canOpenSettings", true)
+        call.reject("Camera permission denied", "cameraDenied", data)
+    }
+
+    @PluginMethod
+    fun openSettings(call: PluginCall) {
+        try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            intent.data = Uri.fromParts("package", context.packageName, null)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            call.resolve()
+        } catch (ex: Exception) {
+            call.reject("Could not open Settings")
         }
     }
 
@@ -270,10 +292,13 @@ class CubeArPlugin : Plugin() {
             sceneView.planeRenderer.isEnabled = true
             sceneView.planeRenderer.isVisible = true
 
-            sceneView.configureSession { _, config ->
+            sceneView.configureSession { session, config ->
                 config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL
                 config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                 config.focusMode = Config.FocusMode.AUTO
+                if (session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                    config.depthMode = Config.DepthMode.AUTOMATIC
+                }
                 // Disable ARCore light estimates: AMBIENT_INTENSITY writes a ~0–1.8
                 // factor into Filament lux each frame and compounds toward black cubes.
                 config.lightEstimationMode = Config.LightEstimationMode.DISABLED

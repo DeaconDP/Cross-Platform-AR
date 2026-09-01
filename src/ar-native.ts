@@ -9,6 +9,20 @@ import {
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
 
+export function isCameraDenied(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const rec = err as { code?: string; data?: { canOpenSettings?: boolean } };
+  return rec.code === "cameraDenied" || rec.data?.canOpenSettings === true;
+}
+
+export async function openArSettings(): Promise<void> {
+  try {
+    await CubeAR.openSettings();
+  } catch {
+    /* Settings sheet unavailable */
+  }
+}
+
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
   console.error("[CubeAR]", err);
@@ -21,7 +35,7 @@ export function nativeARErrorMessage(err: unknown): string {
         : String(err);
 
   if (/camera permission denied/i.test(msg)) {
-    return "Camera access is required for AR. Open Settings → Apps → Cube AR → Permissions and allow Camera.";
+    return "Camera access is required for AR. Open Settings and allow Camera.";
   }
   if (/arcore install declined/i.test(msg)) {
     return "ARCore is required. Install it from the Play Store and try again.";
