@@ -82,12 +82,34 @@ class CubeArPlugin : Plugin() {
 
     @PluginMethod
     fun isSupported(call: PluginCall) {
+        resolveAvailability(call, 0)
+    }
+
+    private fun resolveAvailability(call: PluginCall, attempt: Int) {
         val availability = ArCoreApk.getInstance().checkAvailability(context)
-        val supported = availability.isSupported
+        if (availability == ArCoreApk.Availability.UNKNOWN_CHECKING && attempt < 5) {
+            mainHandler.postDelayed({ resolveAvailability(call, attempt + 1) }, 200)
+            return
+        }
+        val supported = availability.isSupported ||
+            availability == ArCoreApk.Availability.UNKNOWN_CHECKING
         val result = JSObject()
         result.put("supported", supported)
-        result.put("backend", if (supported) "arcore" else "none")
+        result.put("backend", if (availability.isSupported) "arcore" else "none")
+        result.put("reason", reasonOf(availability))
         call.resolve(result)
+    }
+
+    private fun reasonOf(availability: ArCoreApk.Availability): String {
+        return when (availability) {
+            ArCoreApk.Availability.SUPPORTED_INSTALLED -> "supported"
+            ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED,
+            ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD -> "needs_install"
+            ArCoreApk.Availability.UNKNOWN_CHECKING -> "checking"
+            ArCoreApk.Availability.UNKNOWN_ERROR,
+            ArCoreApk.Availability.UNKNOWN_TIMED_OUT -> "unknown"
+            else -> "unsupported"
+        }
     }
 
     @PluginMethod
@@ -111,13 +133,13 @@ class CubeArPlugin : Plugin() {
         if (getPermissionState("camera") == PermissionState.GRANTED) {
             ensureArCoreAndBeginSession(call)
         } else {
-            call.reject("Camera permission denied")
+            call.reject("Camera permission denied", "camera_denied")
         }
     }
 
     private fun ensureArCoreAndBeginSession(call: PluginCall) {
         val activity = activity ?: run {
-            call.reject("No activity available")
+            call.reject("No activity available", "failed")
             return
         }
 
@@ -133,13 +155,13 @@ class CubeArPlugin : Plugin() {
             }
         } catch (ex: UnavailableUserDeclinedInstallationException) {
             pendingStartCall = null
-            call.reject("ARCore install declined")
+            call.reject("ARCore install declined", "needs_install")
         } catch (ex: UnavailableDeviceNotCompatibleException) {
             pendingStartCall = null
-            call.reject("ARCore is not supported on this device")
+            call.reject("ARCore is not supported on this device", "unsupported")
         } catch (ex: Exception) {
             pendingStartCall = null
-            call.reject("Failed to prepare ARCore: ${formatError(ex)}")
+            call.reject("Failed to prepare ARCore: ${formatError(ex)}", "failed")
         }
     }
 
@@ -154,13 +176,13 @@ class CubeArPlugin : Plugin() {
                     onFailed = { ex ->
                         Logger.error("CubeAR attach failed", ex)
                         detachArView()
-                        call.reject("Failed to start native AR: ${formatError(ex)}")
+                        call.reject("Failed to start native AR: ${formatError(ex)}", "failed")
                     },
                 )
             } catch (ex: Exception) {
                 Logger.error("CubeAR attach failed", ex)
                 detachArView()
-                call.reject("Failed to start native AR: ${formatError(ex)}")
+                call.reject("Failed to start native AR: ${formatError(ex)}", "failed")
             }
         }
     }
@@ -696,6 +718,14 @@ class CubeArPlugin : Plugin() {
                 view.arCore.resume(activity, null)
             } catch (ex: Exception) {
                 Logger.error("CubeAR resume failed", ex)
+                mainHandler.postDelayed({
+                    if (arSceneView !== view) return@postDelayed
+                    try {
+                        view.arCore.resume(activity, null)
+                    } catch (retryEx: Exception) {
+                        Logger.error("CubeAR resume retry failed", retryEx)
+                    }
+                }, 400)
             }
         }
     }

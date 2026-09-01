@@ -9,7 +9,7 @@ import type {
 
 export class CubeARWeb extends WebPlugin implements CubeARPlugin {
   async isSupported(): Promise<CubeARSupportResult> {
-    return { supported: false, backend: "none" };
+    return { supported: false, backend: "none", reason: "unsupported" };
   }
 
   async startSession(_options: CubeARSessionOptions): Promise<void> {

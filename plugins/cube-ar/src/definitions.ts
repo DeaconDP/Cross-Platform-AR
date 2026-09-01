@@ -2,9 +2,17 @@ import type { PluginListenerHandle } from "@capacitor/core";
 
 export type CubeARBackend = "arkit" | "arcore" | "none";
 
+export type CubeARAvailReason =
+  | "supported"
+  | "needs_install"
+  | "unsupported"
+  | "checking"
+  | "unknown";
+
 export interface CubeARSupportResult {
   supported: boolean;
   backend: CubeARBackend;
+  reason?: CubeARAvailReason;
 }
 
 export interface CubeARSessionOptions {
