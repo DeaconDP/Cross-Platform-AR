@@ -20,6 +20,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var lastReticleTransform: simd_float4x4?
+    private var lastReticleAt: TimeInterval = 0
+    private static let lastHitMaxAge: TimeInterval = 2.5
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -103,6 +106,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal]
+        config.environmentTexturing = .automatic
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
 
         addReticle(to: view)
@@ -124,6 +128,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView?.removeFromSuperview()
         arView = nil
         reticleNode = nil
+        lastReticleTransform = nil
+        lastReticleAt = 0
         surfaceFound = false
 
         bridge?.webView.isOpaque = true
@@ -131,11 +137,25 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
+        if let frame = view.session.currentFrame, case .notAvailable = frame.camera.trackingState {
             return false
         }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        let transform: simd_float4x4
+        if let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal),
+           let result = view.session.raycast(query).first {
+            transform = result.worldTransform
+        } else if let query = view.raycastQuery(
+            from: CGPoint(x: view.bounds.midX, y: view.bounds.midY),
+            allowing: .estimatedPlane,
+            alignment: .horizontal
+        ), let result = view.session.raycast(query).first {
+            transform = result.worldTransform
+        } else if let cached = lastReticleTransform,
+                  ProcessInfo.processInfo.systemUptime - lastReticleAt <= Self.lastHitMaxAge {
+            transform = cached
+        } else {
+            return false
+        }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -148,7 +168,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         cube.firstMaterial?.metalness.contents = 0.15
 
         let node = SCNNode(geometry: cube)
-        node.simdTransform = result.worldTransform
+        node.simdTransform = transform
         node.position.y += cubeSizeM / 2
         node.eulerAngles.y = Float.random(in: 0...(2 * Float.pi))
 
@@ -171,6 +191,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         reticle.simdTransform = result.worldTransform
+        lastReticleTransform = result.worldTransform
+        lastReticleAt = ProcessInfo.processInfo.systemUptime
         reticle.isHidden = false
         if !surfaceFound {
             surfaceFound = true

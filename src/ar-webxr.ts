@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { bindWebGlRestore } from "./ar-place-policy";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -41,10 +42,24 @@ export async function startWebXR(
   });
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.xr.enabled = true;
-  renderer.xr.setReferenceSpaceType("local");
+  try {
+    renderer.xr.setReferenceSpaceType("local-floor");
+  } catch {
+    renderer.xr.setReferenceSpaceType("local");
+  }
   document.body.appendChild(renderer.domElement);
+  let glLost = false;
+  const unbindGl = bindWebGlRestore(
+    renderer.domElement,
+    () => {
+      glLost = true;
+    },
+    () => {
+      glLost = false;
+    },
+  );
 
   const scene = new THREE.Scene();
   scene.add(createLights());
@@ -96,6 +111,7 @@ export async function startWebXR(
   if (!hitTestSource) {
     unwireDebug();
     unbindSession();
+    unbindGl();
     await session.end();
     renderer.domElement.remove();
     renderer.dispose();
@@ -110,7 +126,7 @@ export async function startWebXR(
 
   let surfaceFound = false;
   renderer.setAnimationLoop((_time, frame?: XRFrame) => {
-    if (!frame) return;
+    if (!frame || glLost) return;
     const referenceSpace = renderer.xr.getReferenceSpace();
     let hits: XRHitTestResult[] = [];
     if (referenceSpace) {
@@ -159,6 +175,7 @@ export async function startWebXR(
   overlay.exit.removeEventListener("click", onExit);
   unwireDebug();
   unbindSession();
+  unbindGl();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
   renderer.setAnimationLoop(null);
   renderer.domElement.remove();
