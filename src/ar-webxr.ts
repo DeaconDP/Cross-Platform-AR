@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { pickCubeXrHit } from "./ar-hit";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -76,16 +77,26 @@ export async function startWebXR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const transientMat = new THREE.Matrix4();
+  let lastTransientAt = 0;
+  let transientVisible = false;
+
   session.addEventListener("select", () => {
-    if (!reticle.visible) return;
+    const source = pickCubeXrHit({
+      transientVisible,
+      reticleVisible: reticle.visible,
+      transientAgeMs: performance.now() - lastTransientAt,
+    });
+    if (!source) return;
     const cube = createCube();
-    reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
+    const from = source === "transient" ? transientMat : reticle.matrix;
+    from.decompose(cube.position, cube.quaternion, cube.scale);
     cube.rotateY(Math.random() * Math.PI * 2);
     scene.add(cube);
     placed++;
     overlay.count.textContent = String(placed);
     overlay.hint.hidden = true;
-    debug.logEvent(`cube placed (#${placed})`);
+    debug.logEvent(`cube placed (#${placed}) via ${source}`);
   });
 
   const onExit = () => session.end();
@@ -101,6 +112,15 @@ export async function startWebXR(
     renderer.dispose();
     throw new Error("Hit testing unavailable on this device");
   }
+  let transientSource: XRTransientInputHitTestSource | null = null;
+  try {
+    transientSource =
+      (await session.requestHitTestSourceForTransientInput!({
+        profile: "generic-touchscreen",
+      })) ?? null;
+  } catch {
+    transientSource = null;
+  }
 
   debug.setSessionMeta({
     domOverlayActive: session.domOverlayState?.type === "screen",
@@ -114,6 +134,19 @@ export async function startWebXR(
     const referenceSpace = renderer.xr.getReferenceSpace();
     let hits: XRHitTestResult[] = [];
     if (referenceSpace) {
+      if (transientSource) {
+        const groups = frame.getHitTestResultsForTransientInput(transientSource);
+        transientVisible = false;
+        for (const group of groups) {
+          const pose = group.results[0]?.getPose(referenceSpace);
+          if (pose) {
+            transientMat.fromArray(pose.transform.matrix);
+            lastTransientAt = performance.now();
+            transientVisible = true;
+            break;
+          }
+        }
+      }
       hits = frame.getHitTestResults(hitTestSource);
       if (hits.length > 0) {
         const pose = hits[0].getPose(referenceSpace);
@@ -160,6 +193,16 @@ export async function startWebXR(
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
+  try {
+    transientSource?.cancel();
+  } catch {
+    /* already ended */
+  }
+  try {
+    hitTestSource.cancel();
+  } catch {
+    /* already ended */
+  }
   renderer.setAnimationLoop(null);
   renderer.domElement.remove();
   renderer.dispose();
