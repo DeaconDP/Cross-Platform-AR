@@ -20,6 +20,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var frameReceived = false
+    private var sessionWatchdog: Timer?
+    private static let firstFrameTimeout: TimeInterval = 10
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -107,6 +110,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startSessionWatchdog()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -119,7 +123,31 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func startSessionWatchdog() {
+        cancelSessionWatchdog()
+        frameReceived = false
+        sessionWatchdog = Timer.scheduledTimer(withTimeInterval: Self.firstFrameTimeout, repeats: false) { [weak self] _ in
+            guard let self, !self.frameReceived, self.arView != nil else { return }
+            self.notifyTracking(state: "unavailable", message: "Camera session timed out")
+            self.detachArView()
+            self.notifyListeners("sessionEnded", data: [:])
+        }
+    }
+
+    private func cancelSessionWatchdog() {
+        sessionWatchdog?.invalidate()
+        sessionWatchdog = nil
+    }
+
+    private func markFrameReceived() {
+        guard !frameReceived else { return }
+        frameReceived = true
+        cancelSessionWatchdog()
+    }
+
     private func detachArView() {
+        cancelSessionWatchdog()
+        frameReceived = false
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
@@ -190,6 +218,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard let view = arView, let frame = view.session.currentFrame else { return }
+        markFrameReceived()
         DispatchQueue.main.async { [weak self] in
             self?.updateReticle(in: view, frame: frame)
         }
@@ -205,6 +234,14 @@ extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
             notifyTracking(state: "unavailable", message: "Tracking unavailable")
         @unknown default:
             notifyTracking(state: "limited")
+        }
+    }
+
+    public func session(_ session: ARSession, didFailWithError error: Error) {
+        notifyTracking(state: "unavailable", message: error.localizedDescription)
+        DispatchQueue.main.async { [weak self] in
+            self?.detachArView()
+            self?.notifyListeners("sessionEnded", data: [:])
         }
     }
 }
