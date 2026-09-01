@@ -20,6 +20,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var coachingOverlay: ARCoachingOverlayView?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -103,10 +104,34 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal]
+        preferStableVideoFormat(config)
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        attachCoaching(to: view)
 
         addReticle(to: view)
         arView = view
+    }
+
+    private func preferStableVideoFormat(_ config: ARWorldTrackingConfiguration) {
+        let formats = ARWorldTrackingConfiguration.supportedVideoFormats
+        if let thirty = formats
+            .filter({ $0.framesPerSecond <= 30 })
+            .max(by: { $0.imageResolution.width < $1.imageResolution.width })
+        {
+            config.videoFormat = thirty
+        }
+    }
+
+    private func attachCoaching(to view: ARSCNView) {
+        coachingOverlay?.removeFromSuperview()
+        let overlay = ARCoachingOverlayView()
+        overlay.session = view.session
+        overlay.goal = .horizontalPlane
+        overlay.activatesAutomatically = true
+        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        overlay.frame = view.bounds
+        view.addSubview(overlay)
+        coachingOverlay = overlay
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +145,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        coachingOverlay?.removeFromSuperview()
+        coachingOverlay = nil
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
@@ -130,12 +157,21 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         bridge?.webView.backgroundColor = .white
     }
 
-    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
-            return false
+    private func raycastHorizontal(at point: CGPoint, in view: ARSCNView) -> ARRaycastResult? {
+        let allowings: [ARRaycastQuery.Target] = [
+            .existingPlaneGeometry, .existingPlaneInfinite, .estimatedPlane,
+        ]
+        for allowing in allowings {
+            guard let query = view.raycastQuery(from: point, allowing: allowing, alignment: .horizontal),
+                  let hit = view.session.raycast(query).first
+            else { continue }
+            return hit
         }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        return nil
+    }
+
+    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
+        guard let result = raycastHorizontal(at: point, in: view) else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -160,12 +196,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private func updateReticle(in view: ARSCNView, frame: ARFrame) {
         guard let reticle = reticleNode else { return }
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
-            reticle.isHidden = true
-            return
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else {
+        guard let result = raycastHorizontal(at: center, in: view) else {
             reticle.isHidden = true
             return
         }
@@ -200,11 +231,28 @@ extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
         case .normal:
             notifyTracking(state: surfaceFound ? "ready" : "initializing")
         case .limited(let reason):
-            notifyTracking(state: "limited", message: reason.localizedDescription)
+            notifyTracking(state: "limited", message: Self.hint(for: reason))
         case .notAvailable:
             notifyTracking(state: "unavailable", message: "Tracking unavailable")
         @unknown default:
             notifyTracking(state: "limited")
+        }
+    }
+
+    private static func hint(for reason: ARCamera.TrackingState.Reason) -> String {
+        switch reason {
+        case .insufficientLight:
+            return "Need more light — turn toward a window or lamp."
+        case .excessiveMotion:
+            return "Hold the phone still so the camera can catch up."
+        case .insufficientFeatures:
+            return "Point at a textured table or floor, not a blank wall."
+        case .relocalizing:
+            return "Looking for the same room — move slowly."
+        case .initializing:
+            return "Move phone to find a surface"
+        @unknown default:
+            return "Tracking limited"
         }
     }
 }

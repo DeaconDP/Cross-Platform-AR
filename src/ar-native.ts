@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { trackingHintCopy } from "./trackingHint";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -93,8 +94,9 @@ export async function startNativeAR(
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
-      overlay.hint.textContent = event.message;
+    if (placed === 0) {
+      const copy = event.message || trackingHintCopy(event.state);
+      if (copy) overlay.hint.textContent = copy;
     }
     if (debug.isEnabled()) {
       debug.tickNative({
