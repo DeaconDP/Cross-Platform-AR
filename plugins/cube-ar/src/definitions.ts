@@ -12,8 +12,11 @@ export interface CubeARSessionOptions {
   colorHex: string;
 }
 
+/** Screen tap in the native AR view's coordinate space. */
 export interface CubeARTapOptions {
+  /** iOS: UIKit points. Android: view pixels (CSS × devicePixelRatio). */
   x: number;
+  /** iOS: UIKit points. Android: view pixels (CSS × devicePixelRatio). */
   y: number;
 }
 

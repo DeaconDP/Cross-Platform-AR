@@ -107,6 +107,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        UIApplication.shared.isIdleTimerDisabled = true
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -125,13 +126,15 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView = nil
         reticleNode = nil
         surfaceFound = false
+        UIApplication.shared.isIdleTimerDisabled = false
 
         bridge?.webView.isOpaque = true
         bridge?.webView.backgroundColor = .white
     }
 
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
+        let allowing: ARRaycastQuery.Target = surfaceFound ? .existingPlaneGeometry : .estimatedPlane
+        guard let query = view.raycastQuery(from: point, allowing: allowing, alignment: .horizontal) else {
             return false
         }
         let results = view.session.raycast(query)
@@ -190,8 +193,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard let view = arView, let frame = view.session.currentFrame else { return }
-        DispatchQueue.main.async { [weak self] in
+        let apply = { [weak self] in
             self?.updateReticle(in: view, frame: frame)
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.async(execute: apply)
         }
     }
 

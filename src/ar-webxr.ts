@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { createCube, createLights } from "./scene";
+import { createCube, createLights, startPreview, stopPreview } from "./scene";
+import { acquireWakeLock } from "./ar-wakelock";
 import {
   type CompatSnapshot,
   DebugCollector,
@@ -34,14 +35,27 @@ export async function startWebXR(
   overlay: OverlayElements,
   snapshot: CompatSnapshot,
 ): Promise<void> {
-  const session = await navigator.xr!.requestSession("immersive-ar", {
-    requiredFeatures: ["hit-test"],
-    optionalFeatures: ["dom-overlay", "plane-detection"],
-    domOverlay: { root: overlay.root },
-  });
+  stopPreview();
+  const releaseWakeLock = await acquireWakeLock();
+  overlay.root.hidden = false;
+
+  let session: XRSession;
+  try {
+    session = await navigator.xr!.requestSession("immersive-ar", {
+      requiredFeatures: ["hit-test"],
+      optionalFeatures: ["dom-overlay", "plane-detection"],
+      domOverlay: { root: overlay.root },
+    });
+  } catch (err) {
+    releaseWakeLock();
+    overlay.root.hidden = true;
+    const previewHost = document.getElementById("preview");
+    if (previewHost) startPreview(previewHost);
+    throw err;
+  }
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.xr.enabled = true;
   renderer.xr.setReferenceSpaceType("local");
   document.body.appendChild(renderer.domElement);
@@ -96,9 +110,14 @@ export async function startWebXR(
   if (!hitTestSource) {
     unwireDebug();
     unbindSession();
+    overlay.exit.removeEventListener("click", onExit);
     await session.end();
     renderer.domElement.remove();
     renderer.dispose();
+    releaseWakeLock();
+    overlay.root.hidden = true;
+    const previewHost = document.getElementById("preview");
+    if (previewHost) startPreview(previewHost);
     throw new Error("Hit testing unavailable on this device");
   }
 
@@ -108,7 +127,30 @@ export async function startWebXR(
     referenceSpaceType: "local",
   });
 
+  const restorePreview = () => {
+    releaseWakeLock();
+    overlay.root.hidden = true;
+    const previewHost = document.getElementById("preview");
+    if (previewHost) startPreview(previewHost);
+  };
+
   let surfaceFound = false;
+  try {
+    await renderer.xr.setSession(session);
+  } catch (err) {
+    overlay.exit.removeEventListener("click", onExit);
+    unwireDebug();
+    unbindSession();
+    renderer.domElement.remove();
+    renderer.dispose();
+    try {
+      await session.end();
+    } catch {
+      /* already ended */
+    }
+    restorePreview();
+    throw err;
+  }
   renderer.setAnimationLoop((_time, frame?: XRFrame) => {
     if (!frame) return;
     const referenceSpace = renderer.xr.getReferenceSpace();
@@ -150,8 +192,6 @@ export async function startWebXR(
     renderer.render(scene, camera);
   });
 
-  await renderer.xr.setSession(session);
-
   await new Promise<void>((resolve) => {
     session.addEventListener("end", () => resolve(), { once: true });
   });
@@ -163,4 +203,5 @@ export async function startWebXR(
   renderer.setAnimationLoop(null);
   renderer.domElement.remove();
   renderer.dispose();
+  restorePreview();
 }

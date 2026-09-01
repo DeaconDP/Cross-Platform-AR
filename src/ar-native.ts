@@ -1,6 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
+import { platformFromCapacitor, screenToNativeTap } from "./ar-coords";
 import {
   type CompatSnapshot,
   DebugCollector,
@@ -9,45 +10,7 @@ import {
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
 
-/** Map native plugin rejection messages to actionable user guidance. */
-export function nativeARErrorMessage(err: unknown): string {
-  console.error("[CubeAR]", err);
-
-  const msg =
-    err instanceof Error
-      ? err.message
-      : typeof err === "object" && err !== null && "message" in err
-        ? String((err as { message: unknown }).message)
-        : String(err);
-
-  if (/camera permission denied/i.test(msg)) {
-    return "Camera access is required for AR. Open Settings → Apps → Cube AR → Permissions and allow Camera.";
-  }
-  if (/arcore install declined/i.test(msg)) {
-    return "ARCore is required. Install it from the Play Store and try again.";
-  }
-  if (/arcore is not supported/i.test(msg)) {
-    return "ARCore is not supported on this device.";
-  }
-  if (/register before|LifecycleOwner|attempting to register while current state is RESUMED/i.test(msg)) {
-    return "Native AR couldn't initialize the camera session. Force-stop the app and try again.";
-  }
-  if (/FatalException|SessionPausedException|session is paused/i.test(msg)) {
-    return "Native AR couldn't start the camera session. Force-stop the app and try again.";
-  }
-  if (/camera session timed out/i.test(msg)) {
-    return "Native AR couldn't start the camera. Force-stop the app and try again.";
-  }
-  if (/^Failed to start native AR:/i.test(msg) || /^Failed to prepare ARCore:/i.test(msg)) {
-    const detail = msg.replace(/^Failed to (start native AR|prepare ARCore):\s*/i, "").trim();
-    if (detail && detail.toLowerCase() !== "null") return detail;
-    return "Native AR failed to start. Force-stop the app and try again.";
-  }
-  if (!msg || msg.toLowerCase() === "null") {
-    return "Native AR failed to start. Force-stop the app and try again.";
-  }
-  return "Native AR failed to start. Try again once; if it persists, reinstall the app.";
-}
+export { nativeARErrorMessage } from "./ar-errors";
 
 export async function isNativeARSupported(): Promise<{
   supported: boolean;
@@ -91,7 +54,14 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  let lastTrackingKey = "";
+  let lastTrackingAt = 0;
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
+    const now = performance.now();
+    const key = `${event.state}:${event.message ?? ""}`;
+    if (key === lastTrackingKey && now - lastTrackingAt < 250) return;
+    lastTrackingKey = key;
+    lastTrackingAt = now;
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
       overlay.hint.textContent = event.message;
@@ -106,21 +76,27 @@ export async function startNativeAR(
     }
   });
 
+  let sessionEndedResolve: (() => void) | undefined;
   const sessionEnded = new Promise<void>((resolve) => {
-    void CubeAR.addListener("sessionEnded", () => resolve());
+    sessionEndedResolve = resolve;
+  });
+  const endedHandle = await CubeAR.addListener("sessionEnded", () => {
+    sessionEndedResolve?.();
   });
 
+  const tapPlatform = platformFromCapacitor(Capacitor.getPlatform());
   const onTap = async (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
-    // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
-    const dpr = window.devicePixelRatio || 1;
+    const coords = screenToNativeTap({
+      clientX: event.clientX,
+      clientY: event.clientY,
+      platform: tapPlatform,
+      devicePixelRatio: window.devicePixelRatio || 1,
+    });
     try {
-      const result = await CubeAR.onScreenTap({
-        x: event.clientX * dpr,
-        y: event.clientY * dpr,
-      });
+      const result = await CubeAR.onScreenTap(coords);
       if (result.placed) {
         placed = result.count;
         overlay.count.textContent = String(placed);
@@ -158,7 +134,7 @@ export async function startNativeAR(
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
-    await CubeAR.removeAllListeners();
+    endedHandle.remove();
     document.body.classList.remove("ar-native-active");
     unwireDebug();
     resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
