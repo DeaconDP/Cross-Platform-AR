@@ -20,6 +20,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var lifeObservers: [NSObjectProtocol] = []
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -103,10 +104,40 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal]
+        config.isAutoFocusEnabled = true
+        config.environmentTexturing = .automatic
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
 
         addReticle(to: view)
         arView = view
+        watchAppLife()
+    }
+
+    private func watchAppLife() {
+        unwatchAppLife()
+        let resign = NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.arView?.session.pause()
+        }
+        let active = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let view = self?.arView, let config = view.session.configuration else { return }
+            view.session.run(config)
+        }
+        lifeObservers = [resign, active]
+    }
+
+    private func unwatchAppLife() {
+        for obs in lifeObservers {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        lifeObservers.removeAll()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +151,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        unwatchAppLife()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
@@ -206,6 +238,27 @@ extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
         @unknown default:
             notifyTracking(state: "limited")
         }
+    }
+
+    public func session(_ session: ARSession, didFailWithError error: Error) {
+        notifyTracking(state: "unavailable", message: error.localizedDescription)
+        DispatchQueue.main.async { [weak self] in
+            self?.detachArView()
+            self?.notifyListeners("sessionEnded", data: [:])
+        }
+    }
+
+    public func sessionWasInterrupted(_ session: ARSession) {
+        arView?.session.pause()
+    }
+
+    public func sessionInterruptionEnded(_ session: ARSession) {
+        guard let view = arView, let config = view.session.configuration else { return }
+        view.session.run(config)
+    }
+
+    public func sessionShouldAttemptRelocalization(_ session: ARSession) -> Bool {
+        true
     }
 }
 

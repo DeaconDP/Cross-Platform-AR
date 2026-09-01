@@ -274,6 +274,7 @@ class CubeArPlugin : Plugin() {
                 config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL
                 config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                 config.focusMode = Config.FocusMode.AUTO
+                config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
                 // Disable ARCore light estimates: AMBIENT_INTENSITY writes a ~0–1.8
                 // factor into Filament lux each frame and compounds toward black cubes.
                 config.lightEstimationMode = Config.LightEstimationMode.DISABLED
@@ -537,15 +538,30 @@ class CubeArPlugin : Plugin() {
         reticleNode = ring
     }
 
-    private fun updateReticle(sceneView: ARSceneView, frame: com.google.ar.core.Frame) {
-        val reticle = reticleNode ?: return
-        val hits = frame.hitTest(
-            sceneView.width / 2f,
-            sceneView.height / 2f,
-        ).filter { hit ->
+    private fun instantOrPlaneHits(
+        frame: com.google.ar.core.Frame,
+        x: Float,
+        y: Float,
+    ): List<HitResult> {
+        val planes = frame.hitTest(x, y).filter { hit ->
             val trackable = hit.trackable
             trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
         }
+        if (planes.isNotEmpty()) return planes
+        return try {
+            frame.hitTestInstantPlacement(x, y, 1.2f)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun updateReticle(sceneView: ARSceneView, frame: com.google.ar.core.Frame) {
+        val reticle = reticleNode ?: return
+        val hits = instantOrPlaneHits(
+            frame,
+            sceneView.width / 2f,
+            sceneView.height / 2f,
+        )
 
         if (hits.isNotEmpty()) {
             val pose = hits[0].hitPose
@@ -569,11 +585,7 @@ class CubeArPlugin : Plugin() {
         if (frame == null) {
             return false
         }
-        val allHits = frame.hitTest(x, y)
-        val hits = allHits.filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
+        val hits = instantOrPlaneHits(frame, x, y)
         if (hits.isEmpty()) return false
 
         val hit = hits[0]
