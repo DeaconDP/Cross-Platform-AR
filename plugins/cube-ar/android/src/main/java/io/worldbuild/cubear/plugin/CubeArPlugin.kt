@@ -143,8 +143,21 @@ class CubeArPlugin : Plugin() {
         }
     }
 
+    private fun activityAlive(): Boolean {
+        val a = activity ?: return false
+        return !a.isFinishing && !a.isDestroyed
+    }
+
     private fun beginSession(call: PluginCall) {
+        if (!activityAlive()) {
+            call.reject("No activity available")
+            return
+        }
         bridge.executeOnMainThread {
+            if (!activityAlive()) {
+                call.reject("No activity available")
+                return@executeOnMainThread
+            }
             try {
                 attachArView(
                     onReady = {
@@ -572,7 +585,10 @@ class CubeArPlugin : Plugin() {
         val allHits = frame.hitTest(x, y)
         val hits = allHits.filter { hit ->
             val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
+            trackable is Plane &&
+                trackable.extentX >= 0.18f &&
+                trackable.extentZ >= 0.18f &&
+                trackable.isPoseInPolygon(hit.hitPose)
         }
         if (hits.isEmpty()) return false
 
