@@ -100,6 +100,11 @@ class CubeArPlugin : Plugin() {
         surfaceFound = false
 
         if (getPermissionState("camera") == PermissionState.GRANTED) {
+            if (arSceneView != null) {
+                notifyTracking("ready", "Surface tracked")
+                call.resolve()
+                return
+            }
             ensureArCoreAndBeginSession(call)
         } else {
             requestPermissionForAlias("camera", call, "cameraPermissionCallback")

@@ -78,7 +78,22 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    private func makeTrackingConfig() -> ARWorldTrackingConfiguration {
+        let config = ARWorldTrackingConfiguration()
+        config.planeDetection = [.horizontal]
+        config.isAutoFocusEnabled = true
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+            config.frameSemantics.insert(.smoothedSceneDepth)
+        }
+        return config
+    }
+
     private func attachArView() throws {
+        if let existing = arView {
+            existing.isHidden = false
+            existing.session.run(makeTrackingConfig(), options: [])
+            return
+        }
         detachArView()
 
         guard let webView = bridge?.webView else {
@@ -101,9 +116,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             webView.insertSubview(view, at: 0)
         }
 
-        let config = ARWorldTrackingConfiguration()
-        config.planeDetection = [.horizontal]
-        view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        view.session.run(makeTrackingConfig(), options: [.resetTracking, .removeExistingAnchors])
 
         addReticle(to: view)
         arView = view
@@ -206,6 +219,20 @@ extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
         @unknown default:
             notifyTracking(state: "limited")
         }
+    }
+
+    public func sessionShouldAttemptRelocalization(_ session: ARSession) -> Bool {
+        true
+    }
+
+    public func sessionWasInterrupted(_ session: ARSession) {
+        notifyTracking(state: "limited", message: "Tracking interrupted")
+    }
+
+    public func sessionInterruptionEnded(_ session: ARSession) {
+        guard let view = arView else { return }
+        view.session.run(makeTrackingConfig(), options: [])
+        notifyTracking(state: "initializing", message: "Resuming AR")
     }
 }
 
