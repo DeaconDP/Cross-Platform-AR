@@ -30,6 +30,7 @@ import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.HitResult
 import com.google.ar.core.Plane
+import com.google.ar.core.Pose
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
 import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationException
@@ -67,6 +68,15 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var lastCamX = 0f
+    private var lastCamY = 0f
+    private var lastCamZ = 0f
+    private var lastCamMs = 0L
+    private var haveCamPose = false
+    private var motionCoached = false
+    private var lastCoachKind: String? = null
+    private var lastTrackingState: String? = null
+    private var lastTrackingMessage: String? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -78,6 +88,10 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+        private const val MIN_PLACE_M = 0.3f
+        private const val MAX_PLACE_M = 4.0f
+        private const val HIT_OFFSET_PX = 32f
+        private const val MOTION_SPEED_MPS = 1.15f
     }
 
     @PluginMethod
@@ -309,12 +323,15 @@ class CubeArPlugin : Plugin() {
                     sessionFrameReceived = true
                     cancelSessionWatchdog()
                 }
+                checkMotion(frame.camera.pose)
                 val tracking = frame.camera.trackingState
                 updateReticle(sceneView, frame)
                 when (tracking) {
                     TrackingState.TRACKING -> {
-                        if (surfaceFound) {
-                            notifyTracking("ready", "Surface tracked")
+                        if (motionCoached) {
+                            /* keep hold-still coaching until the camera settles */
+                        } else if (surfaceFound) {
+                            notifyTracking("ready", "Tap to place a cube")
                         } else {
                             notifyTracking("initializing", "Move phone to find a surface")
                         }
@@ -565,20 +582,82 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun placeCubeAtScreen(x: Float, y: Float, sceneView: ARSceneView): Boolean {
-        val frame = sceneView.frame
-        if (frame == null) {
-            return false
+        val frame = sceneView.frame ?: return false
+        val samples = arrayOf(
+            0f to 0f,
+            HIT_OFFSET_PX to 0f,
+            -HIT_OFFSET_PX to 0f,
+            0f to HIT_OFFSET_PX,
+            0f to -HIT_OFFSET_PX,
+        )
+        var any: HitResult? = null
+        var anyDist = 0f
+        for ((dx, dy) in samples) {
+            val hit = firstPlaneHit(frame, x + dx, y + dy) ?: continue
+            val dist = hitDistanceM(frame.camera.pose, hit.hitPose)
+            if (any == null) {
+                any = hit
+                anyDist = dist
+            }
+            if (dist in MIN_PLACE_M..MAX_PLACE_M) {
+                placeCube(sceneView, hit)
+                return true
+            }
         }
-        val allHits = frame.hitTest(x, y)
-        val hits = allHits.filter { hit ->
+        if (any != null) {
+            notifyCoaching(if (anyDist < MIN_PLACE_M) "stepBack" else "stepCloser")
+        }
+        return false
+    }
+
+    private fun firstPlaneHit(frame: com.google.ar.core.Frame, x: Float, y: Float): HitResult? {
+        return frame.hitTest(x, y).firstOrNull { hit ->
             val trackable = hit.trackable
             trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
         }
-        if (hits.isEmpty()) return false
+    }
 
-        val hit = hits[0]
-        placeCube(sceneView, hit)
-        return true
+    private fun hitDistanceM(cam: Pose, hit: Pose): Float {
+        val dx = hit.tx() - cam.tx()
+        val dy = hit.ty() - cam.ty()
+        val dz = hit.tz() - cam.tz()
+        return sqrt(dx * dx + dy * dy + dz * dz)
+    }
+
+    private fun checkMotion(pose: Pose) {
+        val now = System.currentTimeMillis()
+        if (haveCamPose && now - lastCamMs in 17..399) {
+            val dt = (now - lastCamMs) / 1000f
+            val dx = pose.tx() - lastCamX
+            val dy = pose.ty() - lastCamY
+            val dz = pose.tz() - lastCamZ
+            val speed = sqrt(dx * dx + dy * dy + dz * dz) / dt
+            if (speed >= MOTION_SPEED_MPS) {
+                if (!motionCoached) {
+                    motionCoached = true
+                    notifyCoaching("holdStill")
+                }
+            } else if (speed < 0.28f) {
+                motionCoached = false
+            }
+        }
+        lastCamX = pose.tx()
+        lastCamY = pose.ty()
+        lastCamZ = pose.tz()
+        lastCamMs = now
+        haveCamPose = true
+    }
+
+    private fun notifyCoaching(kind: String) {
+        if (lastCoachKind == kind) return
+        lastCoachKind = kind
+        val message = when (kind) {
+            "holdStill" -> "Hold still — the camera is moving too fast"
+            "stepCloser" -> "Step a little closer, then tap"
+            "stepBack" -> "Step a little farther back, then tap"
+            else -> return
+        }
+        notifyTracking("limited", message)
     }
 
     private fun placeCube(sceneView: ARSceneView, hit: HitResult) {
@@ -629,6 +708,11 @@ class CubeArPlugin : Plugin() {
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
+        haveCamPose = false
+        motionCoached = false
+        lastCoachKind = null
+        lastTrackingState = null
+        lastTrackingMessage = null
         stopImuWarmup()
         arSceneView?.let { view ->
             safeDestroySceneView(view)
@@ -654,6 +738,9 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun notifyTracking(state: String, message: String? = null) {
+        if (state == lastTrackingState && message == lastTrackingMessage) return
+        lastTrackingState = state
+        lastTrackingMessage = message
         val payload = JSObject()
         payload.put("state", state)
         if (message != null) payload.put("message", message)
