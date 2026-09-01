@@ -5,6 +5,7 @@ import { startPreview } from "./scene";
 import { isWebXRSupported, startWebXR } from "./ar-webxr";
 import { isQuickLookSupported, prepareQuickLook } from "./ar-quicklook";
 import { isNativeARSupported, nativeARErrorMessage, startNativeAR } from "./ar-native";
+import { webXRErrorMessage } from "./ar-errors";
 import { buildCompatSnapshot } from "./ar-debug";
 
 const $ = <T extends HTMLElement>(id: string): T =>
@@ -162,12 +163,11 @@ async function init(): Promise<void> {
             arOrigin: origin,
           });
           setPathBusy("webxr", true, "Starting camera\u2026");
-          overlay.root.hidden = false;
           try {
             await startWebXR(overlay, snapshot);
             setStatus("WebXR session ended \u2014 pick another path anytime.");
-          } catch {
-            setStatus("Couldn't start WebXR. Allow camera access and try again.", true);
+          } catch (err) {
+            setStatus(webXRErrorMessage(err), true);
           } finally {
             overlay.root.hidden = true;
             resetPathButton("webxr", "Start WebXR AR");

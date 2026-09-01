@@ -30,6 +30,9 @@ export async function prepareQuickLook(anchor: HTMLAnchorElement): Promise<void>
   });
 
   const blob = new Blob([data], { type: "model/vnd.usdz+zip" });
+  if (anchor.href.startsWith("blob:")) {
+    URL.revokeObjectURL(anchor.href);
+  }
   anchor.href = URL.createObjectURL(blob);
   anchor.rel = "ar";
 }
