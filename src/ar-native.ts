@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { installOrientationGate, isOrientationSettled } from "./ar-placement";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -113,6 +114,7 @@ export async function startNativeAR(
   const onTap = async (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    if (!isOrientationSettled()) return;
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
@@ -133,6 +135,7 @@ export async function startNativeAR(
   };
 
   document.addEventListener("pointerdown", onTap);
+  const offOrient = installOrientationGate();
 
   const onExit = async () => {
     overlay.exit.disabled = true;
@@ -155,6 +158,7 @@ export async function startNativeAR(
     await sessionEnded;
   } finally {
     document.removeEventListener("pointerdown", onTap);
+    offOrient();
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();

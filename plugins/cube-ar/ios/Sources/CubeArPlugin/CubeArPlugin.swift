@@ -103,6 +103,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal]
+        config.worldAlignment = .gravity
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
 
         addReticle(to: view)
@@ -131,12 +132,48 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
-            return false
+        let samples: [CGPoint] = [
+            .zero,
+            CGPoint(x: 32, y: 0),
+            CGPoint(x: -32, y: 0),
+            CGPoint(x: 0, y: 32),
+            CGPoint(x: 0, y: -32),
+        ]
+        var any: ARRaycastResult?
+        var anyDist: Float = 0
+        for delta in samples {
+            let pt = CGPoint(x: point.x + delta.x, y: point.y + delta.y)
+            guard let query = view.raycastQuery(from: pt, allowing: .estimatedPlane, alignment: .horizontal),
+                  let result = view.session.raycast(query).first else { continue }
+            let dist = distanceToCamera(result, in: view)
+            if any == nil {
+                any = result
+                anyDist = dist
+            }
+            if dist >= 0.3 && dist <= 4.0 {
+                return commitCube(result, in: view)
+            }
         }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        if any != nil {
+            let message = anyDist < 0.3
+                ? "Step a little farther back, then tap"
+                : "Step a little closer, then tap"
+            notifyTracking(state: "limited", message: message)
+        }
+        return false
+    }
 
+    private func distanceToCamera(_ result: ARRaycastResult, in view: ARSCNView) -> Float {
+        guard let cam = view.session.currentFrame?.camera else { return 0 }
+        let c = cam.transform.columns.3
+        let t = result.worldTransform.columns.3
+        let dx = c.x - t.x
+        let dy = c.y - t.y
+        let dz = c.z - t.z
+        return sqrt(dx * dx + dy * dy + dz * dz)
+    }
+
+    private func commitCube(_ result: ARRaycastResult, in view: ARSCNView) -> Bool {
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
             height: CGFloat(cubeSizeM),
@@ -200,7 +237,11 @@ extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
         case .normal:
             notifyTracking(state: surfaceFound ? "ready" : "initializing")
         case .limited(let reason):
-            notifyTracking(state: "limited", message: reason.localizedDescription)
+            if reason == .excessiveMotion {
+                notifyTracking(state: "limited", message: "Hold still — the camera is moving too fast")
+            } else {
+                notifyTracking(state: "limited", message: reason.localizedDescription)
+            }
         case .notAvailable:
             notifyTracking(state: "unavailable", message: "Tracking unavailable")
         @unknown default:

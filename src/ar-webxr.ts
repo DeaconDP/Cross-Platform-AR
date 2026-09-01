@@ -40,7 +40,11 @@ export async function startWebXR(
     domOverlay: { root: overlay.root },
   });
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: true,
+    powerPreference: "high-performance",
+  });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.xr.enabled = true;
   renderer.xr.setReferenceSpaceType("local");
