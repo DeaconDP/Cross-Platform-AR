@@ -4,7 +4,7 @@ import { Browser } from "@capacitor/browser";
 import { startPreview } from "./scene";
 import { isWebXRSupported, startWebXR } from "./ar-webxr";
 import { isQuickLookSupported, prepareQuickLook } from "./ar-quicklook";
-import { isNativeARSupported, nativeARErrorMessage, startNativeAR } from "./ar-native";
+import { isNativeARSupported, nativeARErrorMessage, startNativeAR, warmNativeAR } from "./ar-native";
 import { buildCompatSnapshot } from "./ar-debug";
 
 const $ = <T extends HTMLElement>(id: string): T =>
@@ -118,6 +118,7 @@ async function init(): Promise<void> {
   };
 
   if (native.supported) {
+    void warmNativeAR();
     const backendLabel = native.backend === "arkit" ? "ARKit" : "ARCore";
     paths.push(
       markPrimary({

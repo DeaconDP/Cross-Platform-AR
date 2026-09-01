@@ -1,5 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { nextWarmAction } from "./ar-warm";
+import { normalizeTrackingState, trackingCoach } from "./ar-tracking";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -49,6 +51,26 @@ export function nativeARErrorMessage(err: unknown): string {
   return "Native AR failed to start. Try again once; if it persists, reinstall the app.";
 }
 
+let runtimeWarmed = false;
+
+/** Probe ARCore and start IMU warmup before the visitor taps Start. */
+export async function warmNativeAR(): Promise<void> {
+  if (
+    nextWarmAction({
+      native: Capacitor.isNativePlatform(),
+      alreadyWarmed: runtimeWarmed,
+    }) === "skip"
+  ) {
+    return;
+  }
+  try {
+    await CubeAR.warm();
+    runtimeWarmed = true;
+  } catch {
+    /* plugin missing / web stub */
+  }
+}
+
 export async function isNativeARSupported(): Promise<{
   supported: boolean;
   backend: "arkit" | "arcore" | "none";
@@ -93,7 +115,13 @@ export async function startNativeAR(
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    const coach = trackingCoach(
+      normalizeTrackingState(event.state),
+      placed > 0,
+    );
+    if (coach) {
+      overlay.hint.textContent = coach;
+    } else if (event.message && placed === 0) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
