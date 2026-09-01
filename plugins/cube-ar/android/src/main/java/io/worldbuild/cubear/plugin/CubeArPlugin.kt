@@ -91,6 +91,18 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun warm(call: PluginCall) {
+        val availability = ArCoreApk.getInstance().checkAvailability(context)
+        if (availability.isSupported) {
+            activity?.let { startImuWarmup(it) }
+        }
+        val result = JSObject()
+        result.put("warmed", true)
+        result.put("supported", availability.isSupported)
+        call.resolve(result)
+    }
+
+    @PluginMethod
     fun startSession(call: PluginCall) {
         val size = call.getDouble("cubeSizeM")?.toFloat() ?: 0.12f
         val color = call.getString("colorHex") ?: "#30d158"

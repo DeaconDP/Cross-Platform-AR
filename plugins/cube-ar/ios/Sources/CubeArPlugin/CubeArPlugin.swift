@@ -9,6 +9,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "CubeAR"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "isSupported", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "warm", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
@@ -20,12 +21,20 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var savedIdleTimer = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
         call.resolve([
             "supported": supported,
             "backend": supported ? "arkit" : "none",
+        ])
+    }
+
+    @objc func warm(_ call: CAPPluginCall) {
+        call.resolve([
+            "warmed": true,
+            "supported": ARWorldTrackingConfiguration.isSupported,
         ])
     }
 
@@ -107,6 +116,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        savedIdleTimer = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -125,6 +136,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView = nil
         reticleNode = nil
         surfaceFound = false
+        UIApplication.shared.isIdleTimerDisabled = savedIdleTimer
 
         bridge?.webView.isOpaque = true
         bridge?.webView.backgroundColor = .white

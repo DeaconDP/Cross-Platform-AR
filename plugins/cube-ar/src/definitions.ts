@@ -29,6 +29,7 @@ export interface CubeARTrackingEvent {
 
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
+  warm(): Promise<{ warmed: boolean; supported: boolean }>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
