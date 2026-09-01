@@ -27,9 +27,13 @@ import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import com.getcapacitor.Logger
 import com.google.ar.core.ArCoreApk
+import com.google.ar.core.CameraConfig
+import com.google.ar.core.CameraConfigFilter
 import com.google.ar.core.Config
 import com.google.ar.core.HitResult
 import com.google.ar.core.Plane
+import com.google.ar.core.Point
+import com.google.ar.core.TrackingFailureReason
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
 import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationException
@@ -41,6 +45,7 @@ import io.github.sceneview.math.Color as SceneColor
 import io.github.sceneview.math.Direction
 import io.github.sceneview.math.Size
 import io.github.sceneview.node.CubeNode
+import java.util.EnumSet
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -270,13 +275,24 @@ class CubeArPlugin : Plugin() {
             sceneView.planeRenderer.isEnabled = true
             sceneView.planeRenderer.isVisible = true
 
-            sceneView.configureSession { _, config ->
+            sceneView.configureSession { session, config ->
                 config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL
                 config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                 config.focusMode = Config.FocusMode.AUTO
                 // Disable ARCore light estimates: AMBIENT_INTENSITY writes a ~0–1.8
                 // factor into Filament lux each frame and compounds toward black cubes.
                 config.lightEstimationMode = Config.LightEstimationMode.DISABLED
+                try {
+                    val filter = CameraConfigFilter(session).apply {
+                        setTargetFps(EnumSet.of(CameraConfig.TargetFps.TARGET_FPS_30))
+                    }
+                    val configs = session.getSupportedCameraConfigs(filter)
+                    if (configs.isNotEmpty()) {
+                        session.cameraConfig = configs[0]
+                    }
+                } catch (_: Exception) {
+                    // keep the default camera
+                }
             }
 
             // Fixed sun-like light — do not let LightEstimator overwrite intensity.
@@ -319,7 +335,10 @@ class CubeArPlugin : Plugin() {
                             notifyTracking("initializing", "Move phone to find a surface")
                         }
                     }
-                    TrackingState.PAUSED -> notifyTracking("limited", "Tracking limited")
+                    TrackingState.PAUSED -> notifyTracking(
+                        "limited",
+                        failureMessage(frame.camera.trackingFailureReason) ?: "Tracking limited",
+                    )
                     TrackingState.STOPPED -> notifyTracking("unavailable", "Tracking stopped")
                 }
             }
@@ -539,16 +558,15 @@ class CubeArPlugin : Plugin() {
 
     private fun updateReticle(sceneView: ARSceneView, frame: com.google.ar.core.Frame) {
         val reticle = reticleNode ?: return
-        val hits = frame.hitTest(
-            sceneView.width / 2f,
-            sceneView.height / 2f,
-        ).filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
+        val hit = bestHit(
+            frame.hitTest(
+                sceneView.width / 2f,
+                sceneView.height / 2f,
+            ),
+        )
 
-        if (hits.isNotEmpty()) {
-            val pose = hits[0].hitPose
+        if (hit != null) {
+            val pose = hit.hitPose
             reticle.isVisible = true
             reticle.position = io.github.sceneview.math.Position(
                 pose.tx(),
@@ -569,16 +587,55 @@ class CubeArPlugin : Plugin() {
         if (frame == null) {
             return false
         }
-        val allHits = frame.hitTest(x, y)
-        val hits = allHits.filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
-        if (hits.isEmpty()) return false
-
-        val hit = hits[0]
+        val hit = bestHit(frame.hitTest(x, y)) ?: return false
         placeCube(sceneView, hit)
         return true
+    }
+
+    private fun bestHit(hits: List<HitResult>): HitResult? {
+        var bestIn: HitResult? = null
+        var bestArea = -1f
+        var bestHoriz: HitResult? = null
+        var feature: HitResult? = null
+        for (hit in hits) {
+            when (val trackable = hit.trackable) {
+                is Plane -> {
+                    if (trackable.type != Plane.Type.HORIZONTAL_UPWARD_FACING) continue
+                    if (trackable.isPoseInPolygon(hit.hitPose)) {
+                        val area = trackable.extentX * trackable.extentZ
+                        if (area > bestArea) {
+                            bestArea = area
+                            bestIn = hit
+                        }
+                    } else if (bestHoriz == null) {
+                        bestHoriz = hit
+                    }
+                }
+                is Point -> {
+                    if (
+                        feature == null &&
+                        trackable.orientationMode == Point.OrientationMode.ESTIMATED_SURFACE_NORMAL
+                    ) {
+                        feature = hit
+                    }
+                }
+            }
+        }
+        return bestIn ?: bestHoriz ?: feature
+    }
+
+    private fun failureMessage(reason: TrackingFailureReason): String? {
+        return when (reason) {
+            TrackingFailureReason.INSUFFICIENT_LIGHT ->
+                "Need more light — turn toward a window or lamp."
+            TrackingFailureReason.EXCESSIVE_MOTION ->
+                "Hold the phone still so the camera can catch up."
+            TrackingFailureReason.INSUFFICIENT_FEATURES ->
+                "Point at a textured table or floor, not a blank wall."
+            TrackingFailureReason.CAMERA_UNAVAILABLE ->
+                "Camera tracking paused. Close other camera apps and try again."
+            else -> null
+        }
     }
 
     private fun placeCube(sceneView: ARSceneView, hit: HitResult) {
