@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import Capacitor
 import SceneKit
 import UIKit
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openSettings", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -29,9 +31,25 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         ])
     }
 
+    @objc func openSettings(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let url = URL(string: UIApplication.openSettingsURLString) else {
+                call.reject("Could not open Settings")
+                return
+            }
+            UIApplication.shared.open(url) { ok in
+                if ok { call.resolve() } else { call.reject("Could not open Settings") }
+            }
+        }
+    }
+
     @objc func startSession(_ call: CAPPluginCall) {
         guard ARWorldTrackingConfiguration.isSupported else {
             call.reject("ARKit is not supported on this device")
+            return
+        }
+        if AVCaptureDevice.authorizationStatus(for: .video) == .denied {
+            call.reject("Camera permission denied", "cameraDenied", nil, ["canOpenSettings": true])
             return
         }
 
@@ -103,6 +121,14 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal]
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentationWithDepth) {
+            config.frameSemantics.insert(.personSegmentationWithDepth)
+        } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentation) {
+            config.frameSemantics.insert(.personSegmentation)
+        }
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            config.sceneReconstruction = .mesh
+        }
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
 
         addReticle(to: view)
@@ -188,6 +214,43 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 }
 
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
+    public func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
+        guard let mesh = anchor as? ARMeshAnchor else { return }
+        node.geometry = Self.occlusionGeometry(from: mesh)
+    }
+
+    public func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
+        guard let mesh = anchor as? ARMeshAnchor else { return }
+        node.geometry = Self.occlusionGeometry(from: mesh)
+    }
+
+    private static func occlusionGeometry(from mesh: ARMeshAnchor) -> SCNGeometry {
+        let vertices = mesh.geometry.vertices
+        let faces = mesh.geometry.faces
+        let vertexSource = SCNGeometrySource(
+            buffer: vertices.buffer,
+            vertexFormat: vertices.format,
+            semantic: .vertex,
+            vertexCount: vertices.count,
+            dataOffset: vertices.offset,
+            dataStride: vertices.stride
+        )
+        let faceData = Data(bytes: faces.buffer.contents(), count: faces.buffer.length)
+        let element = SCNGeometryElement(
+            data: faceData,
+            primitiveType: .triangles,
+            primitiveCount: faces.count,
+            bytesPerIndex: faces.bytesPerIndex
+        )
+        let geometry = SCNGeometry(sources: [vertexSource], elements: [element])
+        let occlude = SCNMaterial()
+        occlude.colorBufferWriteMask = []
+        occlude.writesToDepthBuffer = true
+        occlude.isDoubleSided = true
+        geometry.materials = [occlude]
+        return geometry
+    }
+
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard let view = arView, let frame = view.session.currentFrame else { return }
         DispatchQueue.main.async { [weak self] in

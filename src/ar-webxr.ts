@@ -36,14 +36,25 @@ export async function startWebXR(
 ): Promise<void> {
   const session = await navigator.xr!.requestSession("immersive-ar", {
     requiredFeatures: ["hit-test"],
-    optionalFeatures: ["dom-overlay", "plane-detection"],
+    optionalFeatures: [
+      "dom-overlay",
+      "plane-detection",
+      "light-estimation",
+      "anchors",
+      "depth-sensing",
+      "local-floor",
+    ],
     domOverlay: { root: overlay.root },
   });
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.xr.enabled = true;
-  renderer.xr.setReferenceSpaceType("local");
+  try {
+    renderer.xr.setReferenceSpaceType("local-floor");
+  } catch {
+    renderer.xr.setReferenceSpaceType("local");
+  }
   document.body.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -71,6 +82,8 @@ export async function startWebXR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
   const unbindSession = debug.bindSession(session);
 
+  let lastHit: XRHitTestResult | null = null;
+  const anchored: { cube: THREE.Object3D; anchor: XRAnchor }[] = [];
   let placed = 0;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
@@ -86,6 +99,12 @@ export async function startWebXR(
     overlay.count.textContent = String(placed);
     overlay.hint.hidden = true;
     debug.logEvent(`cube placed (#${placed})`);
+    const hit = lastHit;
+    if (hit && typeof hit.createAnchor === "function") {
+      void hit.createAnchor().then((anchor) => {
+        if (anchor) anchored.push({ cube, anchor });
+      }).catch(() => undefined);
+    }
   });
 
   const onExit = () => session.end();
@@ -115,6 +134,13 @@ export async function startWebXR(
     let hits: XRHitTestResult[] = [];
     if (referenceSpace) {
       hits = frame.getHitTestResults(hitTestSource);
+      lastHit = hits[0] ?? null;
+      for (const item of anchored) {
+        const pose = frame.getPose(item.anchor.anchorSpace, referenceSpace);
+        if (!pose) continue;
+        item.cube.matrix.fromArray(pose.transform.matrix);
+        item.cube.matrixAutoUpdate = false;
+      }
       if (hits.length > 0) {
         const pose = hits[0].getPose(referenceSpace);
         if (pose) {
