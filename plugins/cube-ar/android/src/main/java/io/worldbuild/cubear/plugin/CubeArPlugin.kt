@@ -682,20 +682,32 @@ class CubeArPlugin : Plugin() {
         super.handleOnResume()
         pendingStartCall?.let { ensureArCoreAndBeginSession(it) }
         val view = arSceneView ?: return
+        val host = activity ?: return
+        // Re-open IMU before Session.resume — Samsung HAL often drops the queue
+        // after background and ARCore 1.54 then fails with sensor queue 0.
+        startImuWarmup(host)
+        mainHandler.postDelayed({ resumeArSession(view, retry = true) }, 150L)
+    }
+
+    private fun resumeArSession(view: ARSceneView, retry: Boolean) {
+        if (arSceneView !== view) return
+        val host = activity ?: return
         val registry = arLifecycleOwner?.registry
-        if (registry != null && registry.currentState.isAtLeast(Lifecycle.State.STARTED) &&
-            !registry.currentState.isAtLeast(Lifecycle.State.RESUMED)
-        ) {
-            try {
+        try {
+            if (registry != null && registry.currentState.isAtLeast(Lifecycle.State.STARTED) &&
+                !registry.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            ) {
                 registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
-            } catch (ex: Exception) {
-                Logger.error("CubeAR lifecycle resume failed", ex)
+            } else {
+                view.arCore.resume(host, null)
             }
-        } else {
-            try {
-                view.arCore.resume(activity, null)
-            } catch (ex: Exception) {
-                Logger.error("CubeAR resume failed", ex)
+        } catch (ex: Exception) {
+            Logger.error("CubeAR resume failed", ex)
+            if (retry) {
+                startImuWarmup(host)
+                mainHandler.postDelayed({ resumeArSession(view, retry = false) }, 250L)
+            } else {
+                notifyTracking("unavailable", "Camera session failed to resume")
             }
         }
     }
