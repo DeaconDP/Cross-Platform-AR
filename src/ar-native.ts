@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { tapWithRetry } from "./ar-place-policy";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -117,12 +118,13 @@ export async function startNativeAR(
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
     try {
-      const result = await CubeAR.onScreenTap({
-        x: event.clientX * dpr,
-        y: event.clientY * dpr,
-      });
+      const result = await tapWithRetry(
+        (x, y) => CubeAR.onScreenTap({ x, y }),
+        event.clientX * dpr,
+        event.clientY * dpr,
+      );
       if (result.placed) {
-        placed = result.count;
+        placed = result.count ?? placed;
         overlay.count.textContent = String(placed);
         overlay.hint.hidden = true;
         debug.logEvent(`cube placed (#${placed})`);

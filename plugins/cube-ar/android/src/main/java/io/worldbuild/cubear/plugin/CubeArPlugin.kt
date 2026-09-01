@@ -565,28 +565,48 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun placeCubeAtScreen(x: Float, y: Float, sceneView: ARSceneView): Boolean {
-        val frame = sceneView.frame
-        if (frame == null) {
+        val frame = sceneView.frame ?: return false
+        if (frame.camera.trackingState == TrackingState.STOPPED) return false
+        val tapHits = usableHits(frame.hitTest(x, y))
+        if (tapHits.isNotEmpty()) {
+            placeCube(sceneView, tapHits[0])
+            return true
+        }
+        val centerHits = usableHits(
+            frame.hitTest(sceneView.width / 2f, sceneView.height / 2f),
+        )
+        if (centerHits.isNotEmpty()) {
+            placeCube(sceneView, centerHits[0])
+            return true
+        }
+        val plane = frame.getUpdatedTrackables(Plane::class.java).firstOrNull { candidate ->
+            candidate.trackingState == TrackingState.TRACKING &&
+                candidate.type == Plane.Type.HORIZONTAL_UPWARD_FACING &&
+                min(candidate.extentX, candidate.extentZ) >= 0.18f
+        } ?: return false
+        try {
+            val anchor = plane.createAnchor(plane.centerPose)
+            placeCubeOnAnchor(sceneView, anchor)
+            return true
+        } catch (_: Exception) {
             return false
         }
-        val allHits = frame.hitTest(x, y)
-        val hits = allHits.filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
-        if (hits.isEmpty()) return false
-
-        val hit = hits[0]
-        placeCube(sceneView, hit)
-        return true
     }
 
-    private fun placeCube(sceneView: ARSceneView, hit: HitResult) {
+    private fun usableHits(allHits: List<HitResult>): List<HitResult> {
+        return allHits.filter { hit ->
+            val trackable = hit.trackable
+            trackable is Plane &&
+                trackable.trackingState == TrackingState.TRACKING &&
+                trackable.isPoseInPolygon(hit.hitPose) &&
+                min(trackable.extentX, trackable.extentZ) >= 0.18f
+        }
+    }
+
+    private fun placeCubeOnAnchor(sceneView: ARSceneView, anchor: com.google.ar.core.Anchor) {
         val loader = materialLoader ?: return
         val (r, g, b) = parseHexColor(cubeColorHex)
-        val anchor = hit.createAnchor()
         val anchorNode = AnchorNode(sceneView.engine, anchor)
-        // Matte non-metal so diffuse color reads under the fixed directional light.
         val material = loader.createColorInstance(
             SceneColor(r, g, b, 1f),
             metallic = 0f,
@@ -602,6 +622,10 @@ class CubeArPlugin : Plugin() {
         anchorNode.addChildNode(cube)
         sceneView.addChildNode(anchorNode)
         placedCount++
+    }
+
+    private fun placeCube(sceneView: ARSceneView, hit: HitResult) {
+        placeCubeOnAnchor(sceneView, hit.createAnchor())
     }
 
     private fun scheduleSessionWatchdog() {
