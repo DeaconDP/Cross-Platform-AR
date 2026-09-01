@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import Capacitor
 import SceneKit
 import UIKit
@@ -20,6 +21,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var thermalObserver: NSObjectProtocol?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -40,16 +42,33 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         placedCount = 0
         surfaceFound = false
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            do {
-                try self.attachArView()
-                self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
-                call.resolve()
-            } catch {
-                self.detachArView()
-                call.reject("Failed to start native AR: \(error.localizedDescription)")
+        let begin = { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                do {
+                    try self.attachArView()
+                    self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
+                    call.resolve()
+                } catch {
+                    self.detachArView()
+                    call.reject("Failed to start native AR: \(error.localizedDescription)")
+                }
             }
+        }
+
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            begin()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                if granted {
+                    begin()
+                } else {
+                    call.reject("Camera permission denied")
+                }
+            }
+        default:
+            call.reject("Camera permission denied")
         }
     }
 
@@ -103,7 +122,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal]
+        config.environmentTexturing = .automatic
+        if let format = Self.pickFastVideoFormat() {
+            config.videoFormat = format
+        }
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        observeThermal()
 
         addReticle(to: view)
         arView = view
@@ -119,7 +143,45 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private static func isUsable(_ result: ARRaycastResult) -> Bool {
+        guard let plane = result.anchor as? ARPlaneAnchor else { return true }
+        return plane.extent.x >= 0.18 && plane.extent.z >= 0.18
+    }
+
+    private static func pickFastVideoFormat() -> ARConfiguration.VideoFormat? {
+        let formats = ARWorldTrackingConfiguration.supportedVideoFormats
+        let ranked = formats.filter {
+            $0.imageResolution.width * $0.imageResolution.height >= 1280 * 720
+        }
+        return (ranked.isEmpty ? formats : ranked).min {
+            ($0.imageResolution.width * $0.imageResolution.height)
+                < ($1.imageResolution.width * $1.imageResolution.height)
+        }
+    }
+
+    private func observeThermal() {
+        applyThermalFps()
+        guard thermalObserver == nil else { return }
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyThermalFps()
+        }
+    }
+
+    private func applyThermalFps() {
+        let hot = ProcessInfo.processInfo.thermalState.rawValue
+            >= ProcessInfo.ThermalState.serious.rawValue
+        arView?.preferredFramesPerSecond = hot ? 30 : 60
+    }
+
     private func detachArView() {
+        if let thermalObserver {
+            NotificationCenter.default.removeObserver(thermalObserver)
+            self.thermalObserver = nil
+        }
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
@@ -135,7 +197,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             return false
         }
         let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        guard let result = results.first(where: { Self.isUsable($0) }) else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),

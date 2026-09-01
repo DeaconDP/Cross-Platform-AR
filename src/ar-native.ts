@@ -1,5 +1,12 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import {
+  cachedNativeSupport,
+  invalidateArStarts,
+  isArForeground,
+  isCurrentArStart,
+  nextArStartToken,
+} from "./ar-session-guard";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -56,12 +63,14 @@ export async function isNativeARSupported(): Promise<{
   if (!Capacitor.isNativePlatform()) {
     return { supported: false, backend: "none" };
   }
-  try {
-    const result = await CubeAR.isSupported();
-    return { supported: result.supported, backend: result.backend };
-  } catch {
-    return { supported: false, backend: "none" };
-  }
+  return cachedNativeSupport(async () => {
+    try {
+      const result = await CubeAR.isSupported();
+      return { supported: result.supported, backend: result.backend };
+    } catch {
+      return { supported: false, backend: "none" };
+    }
+  });
 }
 
 /**
@@ -136,6 +145,7 @@ export async function startNativeAR(
 
   const onExit = async () => {
     overlay.exit.disabled = true;
+    invalidateArStarts();
     try {
       await CubeAR.stopSession();
     } catch {
@@ -144,12 +154,24 @@ export async function startNativeAR(
   };
   overlay.exit.addEventListener("click", onExit);
 
+  const token = nextArStartToken();
   try {
+    if (!isArForeground()) {
+      throw new Error("Bring the app to the front to start AR.");
+    }
     stopPreview();
     await CubeAR.startSession({
       cubeSizeM: CUBE_SIZE,
       colorHex: CUBE_COLOR_HEX,
     });
+    if (!isCurrentArStart(token) || !isArForeground()) {
+      try {
+        await CubeAR.stopSession();
+      } catch {
+        /* superseded */
+      }
+      throw new Error("AR start cancelled.");
+    }
     document.body.classList.add("ar-native-active");
     overlay.root.hidden = false;
     await sessionEnded;
