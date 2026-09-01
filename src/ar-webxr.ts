@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { bindArSessionLife, requestScreenWakeLock } from "./ar-session-life";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -36,14 +37,14 @@ export async function startWebXR(
 ): Promise<void> {
   const session = await navigator.xr!.requestSession("immersive-ar", {
     requiredFeatures: ["hit-test"],
-    optionalFeatures: ["dom-overlay", "plane-detection"],
+    optionalFeatures: ["dom-overlay", "plane-detection", "local-floor"],
     domOverlay: { root: overlay.root },
   });
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.xr.enabled = true;
-  renderer.xr.setReferenceSpaceType("local");
+  renderer.xr.setReferenceSpaceType("local-floor");
   document.body.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -63,7 +64,7 @@ export async function startWebXR(
   debug.setSessionMeta({
     domOverlayActive: session.domOverlayState?.type === "screen",
     hitTestActive: false,
-    referenceSpaceType: "local",
+    referenceSpaceType: "local-floor",
   });
   debug.logEvent("session start");
 
@@ -90,10 +91,23 @@ export async function startWebXR(
 
   const onExit = () => session.end();
   overlay.exit.addEventListener("click", onExit);
+  void requestScreenWakeLock();
+  const onXrVisible = () => {
+    if (session.visibilityState === "visible") void requestScreenWakeLock();
+  };
+  session.addEventListener("visibilitychange", onXrVisible);
+  const unbindLife = bindArSessionLife({
+    onVisible: () => {
+      void requestScreenWakeLock();
+    },
+  });
 
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    session.removeEventListener("visibilitychange", onXrVisible);
+    unbindLife();
+    overlay.exit.removeEventListener("click", onExit);
     unwireDebug();
     unbindSession();
     await session.end();
@@ -105,7 +119,7 @@ export async function startWebXR(
   debug.setSessionMeta({
     domOverlayActive: session.domOverlayState?.type === "screen",
     hitTestActive: true,
-    referenceSpaceType: "local",
+    referenceSpaceType: "local-floor",
   });
 
   let surfaceFound = false;
@@ -150,13 +164,25 @@ export async function startWebXR(
     renderer.render(scene, camera);
   });
 
-  await renderer.xr.setSession(session);
+  try {
+    await renderer.xr.setSession(session);
+  } catch {
+    renderer.xr.setReferenceSpaceType("local");
+    debug.setSessionMeta({
+      domOverlayActive: session.domOverlayState?.type === "screen",
+      hitTestActive: true,
+      referenceSpaceType: "local",
+    });
+    await renderer.xr.setSession(session);
+  }
 
   await new Promise<void>((resolve) => {
     session.addEventListener("end", () => resolve(), { once: true });
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  session.removeEventListener("visibilitychange", onXrVisible);
+  unbindLife();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
