@@ -20,6 +20,16 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var pendingTapCall: CAPPluginCall?
+    private var latchPoint = CGPoint.zero
+    private var latchFrames = 0
+    private static let hitSampleRadius: CGFloat = 28
+    private static let hitLatchFrames = 15
+    private static let hitSampleOffsets: [(CGFloat, CGFloat)] = [
+        (0, 0),
+        (1, 0), (-1, 0), (0, 1), (0, -1),
+        (0.7, 0.7), (0.7, -0.7), (-0.7, 0.7), (-0.7, -0.7)
+    ]
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -68,13 +78,23 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, let view = self.arView else {
-                call.resolve(["placed": false, "count": self?.placedCount ?? 0])
+            guard let self = self else { return }
+            self.cancelTapLatch(placed: false)
+            guard let view = self.arView else {
+                call.resolve(["placed": false, "count": self.placedCount])
                 return
             }
 
-            let placed = self.placeCube(at: CGPoint(x: CGFloat(x), y: CGFloat(y)), in: view)
-            call.resolve(["placed": placed, "count": self.placedCount])
+            let point = CGPoint(x: CGFloat(x), y: CGFloat(y))
+            let placed = self.placeCube(at: point, in: view)
+            if placed {
+                call.resolve(["placed": true, "count": self.placedCount])
+                return
+            }
+            call.keepAlive = true
+            self.pendingTapCall = call
+            self.latchPoint = point
+            self.latchFrames = Self.hitLatchFrames
         }
     }
 
@@ -120,6 +140,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        cancelTapLatch(placed: false)
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
@@ -130,12 +151,59 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         bridge?.webView.backgroundColor = .white
     }
 
-    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
-            return false
+    private func hitHorizontal(at point: CGPoint, in view: ARSCNView) -> ARRaycastResult? {
+        let w = view.bounds.width
+        let h = view.bounds.height
+        guard w > 0, h > 0 else { return nil }
+        var best: ARRaycastResult?
+        var bestDist = CGFloat.greatestFiniteMagnitude
+        for (ox, oy) in Self.hitSampleOffsets {
+            let pt = CGPoint(x: point.x + ox * Self.hitSampleRadius, y: point.y + oy * Self.hitSampleRadius)
+            guard pt.x >= 0, pt.y >= 0, pt.x <= w, pt.y <= h else { continue }
+            guard let query = view.raycastQuery(from: pt, allowing: .estimatedPlane, alignment: .horizontal),
+                  let hit = view.session.raycast(query).first else { continue }
+            let dx = pt.x - point.x
+            let dy = pt.y - point.y
+            let dist = dx * dx + dy * dy
+            if dist < bestDist {
+                bestDist = dist
+                best = hit
+            }
+            if dist == 0 { break }
         }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        return best
+    }
+
+    private func consumeTapLatch() {
+        guard latchFrames > 0, let view = arView else { return }
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in self?.consumeTapLatch() }
+            return
+        }
+        latchFrames -= 1
+        if placeCube(at: latchPoint, in: view) {
+            resolvePendingTap(placed: true)
+            return
+        }
+        if latchFrames <= 0 {
+            resolvePendingTap(placed: false)
+        }
+    }
+
+    private func resolvePendingTap(placed ok: Bool) {
+        latchFrames = 0
+        guard let call = pendingTapCall else { return }
+        pendingTapCall = nil
+        call.resolve(["placed": ok, "count": placedCount])
+    }
+
+    private func cancelTapLatch(placed ok: Bool) {
+        guard pendingTapCall != nil || latchFrames > 0 else { return }
+        resolvePendingTap(placed: ok)
+    }
+
+    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
+        guard let result = hitHorizontal(at: point, in: view) else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -192,6 +260,7 @@ extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
         guard let view = arView, let frame = view.session.currentFrame else { return }
         DispatchQueue.main.async { [weak self] in
             self?.updateReticle(in: view, frame: frame)
+            self?.consumeTapLatch()
         }
     }
 
