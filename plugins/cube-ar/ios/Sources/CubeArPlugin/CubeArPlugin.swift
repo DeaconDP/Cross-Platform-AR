@@ -73,7 +73,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
 
-            let placed = self.placeCube(at: CGPoint(x: CGFloat(x), y: CGFloat(y)), in: view)
+            let placed = self.placeCube(at: self.screenPoint(CGFloat(x), CGFloat(y), in: view), in: view)
             call.resolve(["placed": placed, "count": self.placedCount])
         }
     }
@@ -130,7 +130,22 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         bridge?.webView.backgroundColor = .white
     }
 
+    /// 0–1 is normalized; anything else is treated as view pixels.
+    private func screenPoint(_ x: CGFloat, _ y: CGFloat, in view: ARSCNView) -> CGPoint {
+        let w = view.bounds.width > 1 ? view.bounds.width : UIScreen.main.bounds.width
+        let h = view.bounds.height > 1 ? view.bounds.height : UIScreen.main.bounds.height
+        if x >= 0, y >= 0, x <= 1.01, y <= 1.01 {
+            return CGPoint(x: x * w, y: y * h)
+        }
+        return CGPoint(x: x, y: y)
+    }
+
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
+        if let state = view.session.currentFrame?.camera.trackingState {
+            guard case .normal = state else { return false }
+        } else {
+            return false
+        }
         guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
             return false
         }
@@ -190,6 +205,15 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard let view = arView, let frame = view.session.currentFrame else { return }
+        if !surfaceFound {
+            for anchor in frame.anchors {
+                if let plane = anchor as? ARPlaneAnchor, plane.alignment == .horizontal {
+                    surfaceFound = true
+                    notifyTracking(state: "ready", message: "Tap to place a cube")
+                    break
+                }
+            }
+        }
         DispatchQueue.main.async { [weak self] in
             self?.updateReticle(in: view, frame: frame)
         }
