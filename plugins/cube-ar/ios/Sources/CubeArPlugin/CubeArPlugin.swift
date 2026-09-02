@@ -103,6 +103,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal]
+        config.environmentTexturing = .automatic
+        if #available(iOS 16.0, *) {
+            config.wantsHDREnvironmentTextures = true
+        }
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            config.sceneReconstruction = .mesh
+        }
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
 
         addReticle(to: view)
@@ -130,12 +137,25 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         bridge?.webView.backgroundColor = .white
     }
 
-    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
-            return false
+    private func hitUpright(at point: CGPoint, in view: ARSCNView) -> simd_float4x4? {
+        if let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal),
+           let hit = view.session.raycast(query).first {
+            return upright(hit.worldTransform)
         }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        if let feat = view.hitTest(point, types: .featurePoint).first {
+            return upright(feat.worldTransform)
+        }
+        return nil
+    }
+
+    private func upright(_ t: simd_float4x4) -> simd_float4x4 {
+        var m = matrix_identity_float4x4
+        m.columns.3 = t.columns.3
+        return m
+    }
+
+    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
+        guard let xf = hitUpright(at: point, in: view) else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -148,7 +168,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         cube.firstMaterial?.metalness.contents = 0.15
 
         let node = SCNNode(geometry: cube)
-        node.simdTransform = result.worldTransform
+        node.simdTransform = xf
         node.position.y += cubeSizeM / 2
         node.eulerAngles.y = Float.random(in: 0...(2 * Float.pi))
 
@@ -160,17 +180,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private func updateReticle(in view: ARSCNView, frame: ARFrame) {
         guard let reticle = reticleNode else { return }
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
-            reticle.isHidden = true
-            return
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else {
+        guard let xf = hitUpright(at: center, in: view) else {
             reticle.isHidden = true
             return
         }
 
-        reticle.simdTransform = result.worldTransform
+        reticle.simdTransform = xf
         reticle.isHidden = false
         if !surfaceFound {
             surfaceFound = true
@@ -190,6 +205,11 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard let view = arView, let frame = view.session.currentFrame else { return }
+        if let estimate = frame.lightEstimate {
+            view.scene.lightingEnvironment.intensity = CGFloat(
+                max(0.4, min(2.0, estimate.ambientIntensity / 1000))
+            )
+        }
         DispatchQueue.main.async { [weak self] in
             self?.updateReticle(in: view, frame: frame)
         }
