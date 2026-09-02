@@ -27,5 +27,6 @@ export interface CubeARPlugin {
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;
+    addListener(eventName: "cubePlaced", listenerFunc: (event: CubeARTapResult) => void): Promise<PluginListenerHandle>;
     removeAllListeners(): Promise<void>;
 }
