@@ -565,19 +565,27 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun placeCubeAtScreen(x: Float, y: Float, sceneView: ARSceneView): Boolean {
-        val frame = sceneView.frame
-        if (frame == null) {
-            return false
+        if (tryPlaceAt(x, y, sceneView)) return true
+        val density = sceneView.resources.displayMetrics.density
+        if (density > 1.01f && tryPlaceAt(x / density, y / density, sceneView)) {
+            return true
         }
-        val allHits = frame.hitTest(x, y)
-        val hits = allHits.filter { hit ->
+        val w = sceneView.width.toFloat()
+        val h = sceneView.height.toFloat()
+        if (w > 0f && h > 0f && x in 0f..1.5f && y in 0f..1.5f) {
+            return tryPlaceAt(x * w, y * h, sceneView)
+        }
+        return false
+    }
+
+    private fun tryPlaceAt(x: Float, y: Float, sceneView: ARSceneView): Boolean {
+        val frame = sceneView.frame ?: return false
+        val hits = frame.hitTest(x, y).filter { hit ->
             val trackable = hit.trackable
             trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
         }
         if (hits.isEmpty()) return false
-
-        val hit = hits[0]
-        placeCube(sceneView, hit)
+        placeCube(sceneView, hits[0])
         return true
     }
 

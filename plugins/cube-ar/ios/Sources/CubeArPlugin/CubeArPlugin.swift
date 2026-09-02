@@ -131,6 +131,20 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
+        if placeCubeOnce(at: point, in: view) { return true }
+        let scale = view.contentScaleFactor
+        if scale > 1.01 {
+            let css = CGPoint(x: point.x / scale, y: point.y / scale)
+            if placeCubeOnce(at: css, in: view) { return true }
+        }
+        if point.x <= 1.5, point.y <= 1.5 {
+            let norm = CGPoint(x: point.x * view.bounds.width, y: point.y * view.bounds.height)
+            if placeCubeOnce(at: norm, in: view) { return true }
+        }
+        return false
+    }
+
+    private func placeCubeOnce(at point: CGPoint, in view: ARSCNView) -> Bool {
         guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
             return false
         }
