@@ -67,6 +67,8 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var lowMemory = false
+    private var memoryCallbacks: android.content.ComponentCallbacks2? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -271,7 +273,7 @@ class CubeArPlugin : Plugin() {
             sceneView.planeRenderer.isVisible = true
 
             sceneView.configureSession { _, config ->
-                config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL
+                config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                 config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                 config.focusMode = Config.FocusMode.AUTO
                 // Disable ARCore light estimates: AMBIENT_INTENSITY writes a ~0–1.8
@@ -319,8 +321,16 @@ class CubeArPlugin : Plugin() {
                             notifyTracking("initializing", "Move phone to find a surface")
                         }
                     }
-                    TrackingState.PAUSED -> notifyTracking("limited", "Tracking limited")
-                    TrackingState.STOPPED -> notifyTracking("unavailable", "Tracking stopped")
+                    TrackingState.PAUSED -> notifyTracking(
+                        "limited",
+                        if (placedCount > 0) "Cubes may have slipped — tap to place again"
+                        else "Tracking limited",
+                    )
+                    TrackingState.STOPPED -> notifyTracking(
+                        "unavailable",
+                        if (placedCount > 0) "Cubes may have slipped — tap to place again"
+                        else "Tracking stopped",
+                    )
                 }
             }
 
@@ -340,6 +350,8 @@ class CubeArPlugin : Plugin() {
             addReticle(sceneView)
             arSceneView = sceneView
             attachCompleted = false
+            lowMemory = false
+            registerMemoryCallbacks()
 
             fun finishAttach() {
                 if (attachCompleted || arSceneView !== sceneView) return
@@ -537,7 +549,41 @@ class CubeArPlugin : Plugin() {
         reticleNode = ring
     }
 
+    private fun registerMemoryCallbacks() {
+        if (memoryCallbacks != null) return
+        val callbacks = object : android.content.ComponentCallbacks2 {
+            override fun onTrimMemory(level: Int) {
+                if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+                    dropReticle()
+                }
+            }
+            override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {}
+            override fun onLowMemory() {
+                dropReticle()
+            }
+        }
+        context.registerComponentCallbacks(callbacks)
+        memoryCallbacks = callbacks
+    }
+
+    private fun unregisterMemoryCallbacks() {
+        val callbacks = memoryCallbacks ?: return
+        try {
+            context.unregisterComponentCallbacks(callbacks)
+        } catch (_: Exception) {
+            // already gone
+        }
+        memoryCallbacks = null
+    }
+
+    private fun dropReticle() {
+        if (lowMemory) return
+        lowMemory = true
+        reticleNode?.isVisible = false
+    }
+
     private fun updateReticle(sceneView: ARSceneView, frame: com.google.ar.core.Frame) {
+        if (lowMemory) return
         val reticle = reticleNode ?: return
         val hits = frame.hitTest(
             sceneView.width / 2f,
@@ -629,6 +675,8 @@ class CubeArPlugin : Plugin() {
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
+        unregisterMemoryCallbacks()
+        lowMemory = false
         stopImuWarmup()
         arSceneView?.let { view ->
             safeDestroySceneView(view)

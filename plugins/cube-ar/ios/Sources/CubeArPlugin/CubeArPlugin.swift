@@ -20,6 +20,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var lowMemory = false
+    private var memoryObserver: NSObjectProtocol?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -102,8 +104,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         let config = ARWorldTrackingConfiguration()
-        config.planeDetection = [.horizontal]
+        config.planeDetection = [.horizontal, .vertical]
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        observeMemory()
 
         addReticle(to: view)
         arView = view
@@ -119,7 +122,24 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func observeMemory() {
+        guard memoryObserver == nil else { return }
+        memoryObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.lowMemory = true
+            self?.reticleNode?.isHidden = true
+        }
+    }
+
     private func detachArView() {
+        if let memoryObserver {
+            NotificationCenter.default.removeObserver(memoryObserver)
+            self.memoryObserver = nil
+        }
+        lowMemory = false
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
@@ -131,11 +151,16 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
-            return false
+        let alignments: [ARRaycastQuery.TargetAlignment] = [.horizontal, .vertical]
+        var result: ARRaycastResult?
+        for alignment in alignments {
+            guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: alignment) else {
+                continue
+            }
+            result = view.session.raycast(query).first
+            if result != nil { break }
         }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        guard let result else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -149,7 +174,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let node = SCNNode(geometry: cube)
         node.simdTransform = result.worldTransform
-        node.position.y += cubeSizeM / 2
+        let normal = result.worldTransform.columns.1
+        node.simdPosition += simd_float3(normal.x, normal.y, normal.z) * (cubeSizeM / 2)
         node.eulerAngles.y = Float.random(in: 0...(2 * Float.pi))
 
         view.scene.rootNode.addChildNode(node)
@@ -159,13 +185,20 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func updateReticle(in view: ARSCNView, frame: ARFrame) {
         guard let reticle = reticleNode else { return }
-        let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
+        if lowMemory {
             reticle.isHidden = true
             return
         }
-        let results = view.session.raycast(query)
-        guard let result = results.first else {
+        let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        var result: ARRaycastResult?
+        for alignment: ARRaycastQuery.TargetAlignment in [.horizontal, .vertical] {
+            guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: alignment) else {
+                continue
+            }
+            result = view.session.raycast(query).first
+            if result != nil { break }
+        }
+        guard let result else {
             reticle.isHidden = true
             return
         }
@@ -200,9 +233,13 @@ extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
         case .normal:
             notifyTracking(state: surfaceFound ? "ready" : "initializing")
         case .limited(let reason):
-            notifyTracking(state: "limited", message: reason.localizedDescription)
+            let slipped = placedCount > 0 ? "Cubes may have slipped — tap to place again" : reason.localizedDescription
+            notifyTracking(state: "limited", message: slipped)
         case .notAvailable:
-            notifyTracking(state: "unavailable", message: "Tracking unavailable")
+            notifyTracking(
+                state: "unavailable",
+                message: placedCount > 0 ? "Cubes may have slipped — tap to place again" : "Tracking unavailable"
+            )
         @unknown default:
             notifyTracking(state: "limited")
         }
