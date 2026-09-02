@@ -37,6 +37,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         cubeSizeM = Float(call.getDouble("cubeSizeM") ?? 0.12)
         cubeColorHex = call.getString("colorHex") ?? "#30d158"
+
+        if arView != nil {
+            call.resolve()
+            return
+        }
+
         placedCount = 0
         surfaceFound = false
 

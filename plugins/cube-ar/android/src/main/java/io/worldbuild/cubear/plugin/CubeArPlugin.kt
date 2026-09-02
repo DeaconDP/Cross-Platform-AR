@@ -96,6 +96,12 @@ class CubeArPlugin : Plugin() {
         val color = call.getString("colorHex") ?: "#30d158"
         cubeSizeM = max(0.05f, size)
         cubeColorHex = color
+
+        if (arSceneView != null) {
+            call.resolve()
+            return
+        }
+
         placedCount = 0
         surfaceFound = false
 
