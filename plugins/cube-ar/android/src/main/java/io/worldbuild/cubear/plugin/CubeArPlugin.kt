@@ -310,6 +310,21 @@ class CubeArPlugin : Plugin() {
                     cancelSessionWatchdog()
                 }
                 val tracking = frame.camera.trackingState
+                if (!surfaceFound) {
+                    try {
+                        val planes = sceneView.session?.getAllTrackables(Plane::class.java)
+                        if (planes?.any {
+                                it.trackingState == TrackingState.TRACKING &&
+                                    it.type == Plane.Type.HORIZONTAL_UPWARD_FACING
+                            } == true
+                        ) {
+                            surfaceFound = true
+                            notifyTracking("ready", "Tap to place a cube")
+                        }
+                    } catch (_: Exception) {
+                        // session may not be ready on the first frames
+                    }
+                }
                 updateReticle(sceneView, frame)
                 when (tracking) {
                     TrackingState.TRACKING -> {
@@ -564,12 +579,30 @@ class CubeArPlugin : Plugin() {
         }
     }
 
+    private fun screenPoint(x: Float, y: Float, sceneView: ARSceneView): Pair<Float, Float> {
+        var w = sceneView.width.toFloat()
+        var h = sceneView.height.toFloat()
+        if (w < 1f || h < 1f) {
+            val web = bridge.webView
+            w = web.width.toFloat()
+            h = web.height.toFloat()
+        }
+        if (x in 0f..1.01f && y in 0f..1.01f) {
+            return x * w to y * h
+        }
+        return x to y
+    }
+
     private fun placeCubeAtScreen(x: Float, y: Float, sceneView: ARSceneView): Boolean {
         val frame = sceneView.frame
         if (frame == null) {
             return false
         }
-        val allHits = frame.hitTest(x, y)
+        if (frame.camera.trackingState != TrackingState.TRACKING) {
+            return false
+        }
+        val (px, py) = screenPoint(x, y, sceneView)
+        val allHits = frame.hitTest(px, py)
         val hits = allHits.filter { hit ->
             val trackable = hit.trackable
             trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)

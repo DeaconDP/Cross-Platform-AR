@@ -114,12 +114,10 @@ export async function startNativeAR(
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
-    // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
-    const dpr = window.devicePixelRatio || 1;
     try {
       const result = await CubeAR.onScreenTap({
-        x: event.clientX * dpr,
-        y: event.clientY * dpr,
+        x: event.clientX / Math.max(window.innerWidth, 1),
+        y: event.clientY / Math.max(window.innerHeight, 1),
       });
       if (result.placed) {
         placed = result.count;
