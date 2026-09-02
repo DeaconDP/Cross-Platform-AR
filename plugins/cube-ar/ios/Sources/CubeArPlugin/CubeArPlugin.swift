@@ -11,6 +11,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "isSupported", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "pauseSession", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "resumeSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
     ]
 
@@ -20,6 +22,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var userPaused = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -61,6 +64,32 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func pauseSession(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            self?.userPaused = true
+            self?.arView?.session.pause()
+            call.resolve()
+        }
+    }
+
+    @objc func resumeSession(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                call.resolve()
+                return
+            }
+            self.userPaused = false
+            guard let view = self.arView, ARWorldTrackingConfiguration.isSupported else {
+                call.resolve()
+                return
+            }
+            let config = ARWorldTrackingConfiguration()
+            config.planeDetection = [.horizontal]
+            view.session.run(config)
+            call.resolve()
+        }
+    }
+
     @objc func onScreenTap(_ call: CAPPluginCall) {
         guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
             call.reject("Missing tap coordinates")
@@ -68,7 +97,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, let view = self.arView else {
+            guard let self = self, let view = self.arView, !self.userPaused else {
                 call.resolve(["placed": false, "count": self?.placedCount ?? 0])
                 return
             }
@@ -125,6 +154,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView = nil
         reticleNode = nil
         surfaceFound = false
+        userPaused = false
 
         bridge?.webView.isOpaque = true
         bridge?.webView.backgroundColor = .white

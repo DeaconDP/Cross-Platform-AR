@@ -9,6 +9,12 @@ export class CubeARWeb extends WebPlugin {
     async stopSession() {
         // no-op
     }
+    async pauseSession() {
+        // no-op
+    }
+    async resumeSession() {
+        // no-op
+    }
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
