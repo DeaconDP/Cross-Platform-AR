@@ -110,21 +110,55 @@ export async function startNativeAR(
     void CubeAR.addListener("sessionEnded", () => resolve());
   });
 
-  const onTap = async (event: PointerEvent) => {
+  const TAP_SLOP = 12;
+  let down: { x: number; y: number } | null = null;
+  let dragging = false;
+
+  const toViewPx = (event: PointerEvent) => {
+    const dpr = window.devicePixelRatio || 1;
+    return { x: event.clientX * dpr, y: event.clientY * dpr };
+  };
+
+  const onPointerDown = (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    down = { x: event.clientX, y: event.clientY };
+    dragging = false;
+  };
 
-    // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
-    const dpr = window.devicePixelRatio || 1;
+  const onPointerMove = async (event: PointerEvent) => {
+    if (!down) return;
+    const travel = Math.hypot(event.clientX - down.x, event.clientY - down.y);
+    if (placed === 0 || travel <= TAP_SLOP) return;
+    dragging = true;
     try {
-      const result = await CubeAR.onScreenTap({
-        x: event.clientX * dpr,
-        y: event.clientY * dpr,
-      });
+      const pt = toViewPx(event);
+      const result = await CubeAR.onScreenDrag(pt);
+      if (result.moved) {
+        overlay.hint.hidden = true;
+      }
+    } catch {
+      debug.logEvent("drag failed");
+    }
+  };
+
+  const onPointerUp = async (event: PointerEvent) => {
+    if (!down) return;
+    const wasDrag = dragging;
+    down = null;
+    dragging = false;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    if (wasDrag) return;
+
+    try {
+      const pt = toViewPx(event);
+      const result = await CubeAR.onScreenTap(pt);
       if (result.placed) {
         placed = result.count;
         overlay.count.textContent = String(placed);
-        overlay.hint.hidden = true;
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = "Tap to place more · drag to slide the last cube";
         debug.logEvent(`cube placed (#${placed})`);
       }
     } catch {
@@ -132,7 +166,10 @@ export async function startNativeAR(
     }
   };
 
-  document.addEventListener("pointerdown", onTap);
+  document.addEventListener("pointerdown", onPointerDown);
+  document.addEventListener("pointermove", onPointerMove);
+  document.addEventListener("pointerup", onPointerUp);
+  document.addEventListener("pointercancel", onPointerUp);
 
   const onExit = async () => {
     overlay.exit.disabled = true;
@@ -154,7 +191,10 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
-    document.removeEventListener("pointerdown", onTap);
+    document.removeEventListener("pointerdown", onPointerDown);
+    document.removeEventListener("pointermove", onPointerMove);
+    document.removeEventListener("pointerup", onPointerUp);
+    document.removeEventListener("pointercancel", onPointerUp);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
