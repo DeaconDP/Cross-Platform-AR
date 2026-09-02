@@ -1,6 +1,7 @@
 import { WebPlugin } from "@capacitor/core";
 import type {
   CubeARPlugin,
+  CubeARDragResult,
   CubeARSessionOptions,
   CubeARSupportResult,
   CubeARTapOptions,
@@ -22,5 +23,9 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
 
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
+  }
+
+  async onScreenDrag(_options: CubeARTapOptions): Promise<CubeARDragResult> {
+    return { moved: false, count: 0 };
   }
 }

@@ -58,6 +58,8 @@ class CubeArPlugin : Plugin() {
     private var cubeColorHex = "#30d158"
     private var placedCount = 0
     private var reticleNode: CubeNode? = null
+    private var lastAnchorNode: AnchorNode? = null
+    private var lastCube: CubeNode? = null
     private var surfaceFound = false
     private var pendingStartCall: PluginCall? = null
     private var sessionFrameReceived = false
@@ -98,6 +100,8 @@ class CubeArPlugin : Plugin() {
         cubeColorHex = color
         placedCount = 0
         surfaceFound = false
+        lastAnchorNode = null
+        lastCube = null
 
         if (getPermissionState("camera") == PermissionState.GRANTED) {
             ensureArCoreAndBeginSession(call)
@@ -216,6 +220,35 @@ class CubeArPlugin : Plugin() {
             val placed = placeCubeAtScreen(x, y, view)
             val result = JSObject()
             result.put("placed", placed)
+            result.put("count", placedCount)
+            call.resolve(result)
+        }
+    }
+
+    @PluginMethod
+    fun onScreenDrag(call: PluginCall) {
+        val x = call.getFloat("x") ?: run {
+            call.reject("Missing drag x")
+            return
+        }
+        val y = call.getFloat("y") ?: run {
+            call.reject("Missing drag y")
+            return
+        }
+
+        bridge.executeOnMainThread {
+            val view = arSceneView
+            if (view == null) {
+                val result = JSObject()
+                result.put("moved", false)
+                result.put("count", placedCount)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
+
+            val moved = moveLastCubeAtScreen(x, y, view)
+            val result = JSObject()
+            result.put("moved", moved)
             result.put("count", placedCount)
             call.resolve(result)
         }
@@ -557,7 +590,7 @@ class CubeArPlugin : Plugin() {
             )
             if (!surfaceFound) {
                 surfaceFound = true
-                notifyTracking("ready", "Tap to place a cube")
+                notifyTracking("ready", "Tap to place · drag to slide the last cube")
             }
         } else {
             reticle.isVisible = false
@@ -601,7 +634,31 @@ class CubeArPlugin : Plugin() {
         cube.position = io.github.sceneview.math.Position(0f, cubeSizeM / 2f, 0f)
         anchorNode.addChildNode(cube)
         sceneView.addChildNode(anchorNode)
+        lastAnchorNode = anchorNode
+        lastCube = cube
         placedCount++
+    }
+
+    private fun moveLastCubeAtScreen(x: Float, y: Float, sceneView: ARSceneView): Boolean {
+        val cube = lastCube ?: return false
+        val frame = sceneView.frame ?: return false
+        val hits = frame.hitTest(x, y).filter { hit ->
+            val trackable = hit.trackable
+            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
+        }
+        if (hits.isEmpty()) return false
+        val hit = hits[0]
+        val newAnchor = hit.createAnchor()
+        val next = AnchorNode(sceneView.engine, newAnchor)
+        lastAnchorNode?.removeChildNode(cube)
+        next.addChildNode(cube)
+        sceneView.addChildNode(next)
+        lastAnchorNode?.let { old ->
+            old.anchor?.detach()
+            sceneView.removeChildNode(old)
+        }
+        lastAnchorNode = next
+        return true
     }
 
     private fun scheduleSessionWatchdog() {
@@ -635,6 +692,8 @@ class CubeArPlugin : Plugin() {
             arSceneView = null
             materialLoader = null
             reticleNode = null
+            lastAnchorNode = null
+            lastCube = null
             surfaceFound = false
         }
         arLifecycleOwner = null

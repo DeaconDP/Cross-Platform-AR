@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { comfortScale } from "./ar-comfort";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -72,21 +73,67 @@ export async function startWebXR(
   const unbindSession = debug.bindSession(session);
 
   let placed = 0;
+  let lastCube: THREE.Mesh | null = null;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
-  session.addEventListener("select", () => {
+  const TAP_SLOP = 12;
+  let down: { x: number; y: number } | null = null;
+  let dragging = false;
+
+  const placeOrMoveAtReticle = (moveLast: boolean) => {
     if (!reticle.visible) return;
+    if (moveLast && lastCube) {
+      const yaw = lastCube.rotation.y;
+      const kept = lastCube.scale.clone();
+      reticle.matrix.decompose(lastCube.position, lastCube.quaternion, lastCube.scale);
+      lastCube.scale.copy(kept);
+      lastCube.rotation.y = yaw;
+      return;
+    }
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
+    const dist = cube.position.length();
+    cube.scale.multiplyScalar(comfortScale(dist));
     cube.rotateY(Math.random() * Math.PI * 2);
     scene.add(cube);
+    lastCube = cube;
     placed++;
     overlay.count.textContent = String(placed);
-    overlay.hint.hidden = true;
+    overlay.hint.hidden = false;
+    overlay.hint.textContent = "Tap to place more · drag to slide the last cube";
     debug.logEvent(`cube placed (#${placed})`);
+  };
+
+  session.addEventListener("select", () => {
+    if (dragging) return;
+    placeOrMoveAtReticle(false);
   });
+
+  const onPointerDown = (event: PointerEvent) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    down = { x: event.clientX, y: event.clientY };
+    dragging = false;
+  };
+  const onPointerMove = (event: PointerEvent) => {
+    if (!down || placed === 0) return;
+    const travel = Math.hypot(event.clientX - down.x, event.clientY - down.y);
+    if (travel <= TAP_SLOP) return;
+    dragging = true;
+    placeOrMoveAtReticle(true);
+  };
+  const onPointerUp = () => {
+    down = null;
+    window.setTimeout(() => {
+      dragging = false;
+    }, 0);
+  };
+  overlay.root.addEventListener("pointerdown", onPointerDown);
+  overlay.root.addEventListener("pointermove", onPointerMove);
+  overlay.root.addEventListener("pointerup", onPointerUp);
+  overlay.root.addEventListener("pointercancel", onPointerUp);
 
   const onExit = () => session.end();
   overlay.exit.addEventListener("click", onExit);
@@ -156,6 +203,10 @@ export async function startWebXR(
     session.addEventListener("end", () => resolve(), { once: true });
   });
 
+  overlay.root.removeEventListener("pointerdown", onPointerDown);
+  overlay.root.removeEventListener("pointermove", onPointerMove);
+  overlay.root.removeEventListener("pointerup", onPointerUp);
+  overlay.root.removeEventListener("pointercancel", onPointerUp);
   overlay.exit.removeEventListener("click", onExit);
   unwireDebug();
   unbindSession();

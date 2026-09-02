@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "onScreenDrag", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var lastCube: SCNNode?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -39,6 +41,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         cubeColorHex = call.getString("colorHex") ?? "#30d158"
         placedCount = 0
         surfaceFound = false
+        lastCube = nil
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -75,6 +78,22 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
             let placed = self.placeCube(at: CGPoint(x: CGFloat(x), y: CGFloat(y)), in: view)
             call.resolve(["placed": placed, "count": self.placedCount])
+        }
+    }
+
+    @objc func onScreenDrag(_ call: CAPPluginCall) {
+        guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
+            call.reject("Missing drag coordinates")
+            return
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let view = self.arView else {
+                call.resolve(["moved": false, "count": self?.placedCount ?? 0])
+                return
+            }
+            let moved = self.moveLastCube(at: CGPoint(x: CGFloat(x), y: CGFloat(y)), in: view)
+            call.resolve(["moved": moved, "count": self.placedCount])
         }
     }
 
@@ -124,6 +143,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView?.removeFromSuperview()
         arView = nil
         reticleNode = nil
+        lastCube = nil
         surfaceFound = false
 
         bridge?.webView.isOpaque = true
@@ -153,7 +173,21 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         node.eulerAngles.y = Float.random(in: 0...(2 * Float.pi))
 
         view.scene.rootNode.addChildNode(node)
+        lastCube = node
         placedCount += 1
+        return true
+    }
+
+    private func moveLastCube(at point: CGPoint, in view: ARSCNView) -> Bool {
+        guard let cube = lastCube else { return false }
+        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
+            return false
+        }
+        guard let result = view.session.raycast(query).first else { return false }
+        let yaw = cube.eulerAngles.y
+        cube.simdTransform = result.worldTransform
+        cube.position.y += cubeSizeM / 2
+        cube.eulerAngles.y = yaw
         return true
     }
 
@@ -174,7 +208,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticle.isHidden = false
         if !surfaceFound {
             surfaceFound = true
-            notifyTracking(state: "ready", message: "Tap to place a cube")
+            notifyTracking(state: "ready", message: "Tap to place · drag to slide the last cube")
         }
     }
 
