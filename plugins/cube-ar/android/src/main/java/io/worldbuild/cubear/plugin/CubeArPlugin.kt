@@ -67,6 +67,8 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var lastMapping = ""
+    private var lastHeartbeatMs = 0L
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -78,6 +80,8 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+        private const val NEAR_MISS_SLACK_M = 0.12f
+        private const val HEARTBEAT_MS = 2000L
     }
 
     @PluginMethod
@@ -309,6 +313,8 @@ class CubeArPlugin : Plugin() {
                     sessionFrameReceived = true
                     cancelSessionWatchdog()
                 }
+                emitHeartbeat()
+                emitMapping()
                 val tracking = frame.camera.trackingState
                 updateReticle(sceneView, frame)
                 when (tracking) {
@@ -539,16 +545,12 @@ class CubeArPlugin : Plugin() {
 
     private fun updateReticle(sceneView: ARSceneView, frame: com.google.ar.core.Frame) {
         val reticle = reticleNode ?: return
-        val hits = frame.hitTest(
-            sceneView.width / 2f,
-            sceneView.height / 2f,
-        ).filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
+        val hit = pickHorizontalHit(
+            frame.hitTest(sceneView.width / 2f, sceneView.height / 2f),
+        )
 
-        if (hits.isNotEmpty()) {
-            val pose = hits[0].hitPose
+        if (hit != null) {
+            val pose = hit.hitPose
             reticle.isVisible = true
             reticle.position = io.github.sceneview.math.Position(
                 pose.tx(),
@@ -565,20 +567,55 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun placeCubeAtScreen(x: Float, y: Float, sceneView: ARSceneView): Boolean {
-        val frame = sceneView.frame
-        if (frame == null) {
-            return false
-        }
-        val allHits = frame.hitTest(x, y)
-        val hits = allHits.filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
-        if (hits.isEmpty()) return false
-
-        val hit = hits[0]
+        val frame = sceneView.frame ?: return false
+        val hit = pickHorizontalHit(frame.hitTest(x, y)) ?: return false
         placeCube(sceneView, hit)
         return true
+    }
+
+    private fun pickHorizontalHit(hits: List<HitResult>): HitResult? {
+        var bestIn: HitResult? = null
+        var bestScore = Float.MAX_VALUE
+        var near: HitResult? = null
+        var nearDist = NEAR_MISS_SLACK_M
+        for (hit in hits) {
+            val plane = hit.trackable as? Plane ?: continue
+            if (plane.trackingState != TrackingState.TRACKING) continue
+            if (plane.type == Plane.Type.VERTICAL) continue
+            if (plane.isPoseInPolygon(hit.hitPose)) {
+                val e = max(plane.extentX, plane.extentZ)
+                val score = when {
+                    e in 0.25f..1.4f -> 0f
+                    e < 0.25f -> 1f
+                    else -> 2f
+                }
+                if (score < bestScore) {
+                    bestScore = score
+                    bestIn = hit
+                }
+            } else {
+                val dist = outsideDistance(plane, hit)
+                if (dist < nearDist) {
+                    nearDist = dist
+                    near = hit
+                }
+            }
+        }
+        return bestIn ?: near
+    }
+
+    private fun outsideDistance(plane: Plane, hit: HitResult): Float {
+        val center = plane.centerPose
+        val local = FloatArray(3)
+        center.inverseTransformPoint(
+            floatArrayOf(hit.hitPose.tx(), hit.hitPose.ty(), hit.hitPose.tz()),
+            0,
+            local,
+            0,
+        )
+        val dx = max(0f, kotlin.math.abs(local[0]) - plane.extentX / 2f)
+        val dz = max(0f, kotlin.math.abs(local[2]) - plane.extentZ / 2f)
+        return sqrt(dx * dx + dz * dz)
     }
 
     private fun placeCube(sceneView: ARSceneView, hit: HitResult) {
@@ -636,6 +673,8 @@ class CubeArPlugin : Plugin() {
             materialLoader = null
             reticleNode = null
             surfaceFound = false
+            lastMapping = ""
+            lastHeartbeatMs = 0L
         }
         arLifecycleOwner = null
 
@@ -651,6 +690,36 @@ class CubeArPlugin : Plugin() {
         val g = ((value shr 8) and 0xFF) / 255f
         val b = (value and 0xFF) / 255f
         return Triple(r, g, b)
+    }
+
+    private fun emitHeartbeat() {
+        val now = System.currentTimeMillis()
+        if (now - lastHeartbeatMs < HEARTBEAT_MS) return
+        lastHeartbeatMs = now
+        notifyListeners("arHeartbeat", JSObject())
+    }
+
+    private fun emitMapping() {
+        val session = arSceneView?.session ?: return
+        var count = 0
+        var maxExtent = 0f
+        for (plane in session.getAllTrackables(Plane::class.java)) {
+            if (plane.trackingState != TrackingState.TRACKING) continue
+            if (plane.type == Plane.Type.VERTICAL) continue
+            count++
+            maxExtent = max(maxExtent, max(plane.extentX, plane.extentZ))
+        }
+        val status = when {
+            count == 0 -> "notAvailable"
+            maxExtent < 0.18f -> "limited"
+            count >= 2 || maxExtent >= 0.45f -> "mapped"
+            else -> "extending"
+        }
+        if (status == lastMapping) return
+        lastMapping = status
+        val payload = JSObject()
+        payload.put("status", status)
+        notifyListeners("mapping", payload)
     }
 
     private fun notifyTracking(state: String, message: String? = null) {

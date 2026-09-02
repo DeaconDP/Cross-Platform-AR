@@ -27,6 +27,11 @@ export interface CubeARTrackingEvent {
   message?: string;
 }
 
+export interface CubeARMappingEvent {
+  status?: string;
+  worldMapRestored?: boolean;
+}
+
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
   startSession(options: CubeARSessionOptions): Promise<void>;
@@ -38,6 +43,14 @@ export interface CubeARPlugin {
   ): Promise<PluginListenerHandle>;
   addListener(
     eventName: "sessionEnded",
+    listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "mapping",
+    listenerFunc: (event: CubeARMappingEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "arHeartbeat",
     listenerFunc: () => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;

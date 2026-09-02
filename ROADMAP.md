@@ -8,6 +8,8 @@ Tap-to-place cube on Android (WebXR) and iOS (AR Quick Look), inline preview els
 
 Landing screen lists every available AR route with labels (Native ARKit/ARCore, WebXR, Quick Look, Chrome handoff). Local `cube-ar` Capacitor plugin for in-app native tap-to-place on iOS and Android.
 
+**2026-09-02:** iOS world-map re-entry, near-miss tap snap, mapping-quality coach (`plugins/cube-ar`). Physical device QA still open.
+
 ## Ideas / later
 
 - Deploy to a public HTTPS host so phones don't need the LAN + self-signed cert dance (also unblocks Cap Android `VITE_AR_ORIGIN` without LAN certs)

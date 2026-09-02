@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import Capacitor
 import SceneKit
 import UIKit
@@ -20,6 +21,14 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var lastMapping = ""
+    private var lastHeartbeat: TimeInterval = 0
+    private var worldMapSaved = false
+    private var worldMapRestored = false
+
+    private static let worldMapTTL: TimeInterval = 12 * 60
+    private static let nearMissSlack: Float = 0.12
+    private static let heartbeatSec: TimeInterval = 2
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -85,6 +94,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             throw NSError(domain: "CubeAR", code: 1, userInfo: [NSLocalizedDescriptionKey: "WebView unavailable"])
         }
 
+        softenAudioSession()
         webView.isOpaque = false
         webView.backgroundColor = .clear
 
@@ -103,7 +113,17 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal]
-        view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        worldMapRestored = false
+        worldMapSaved = false
+        lastMapping = ""
+        lastHeartbeat = 0
+        if let map = loadRecentWorldMap() {
+            config.initialWorldMap = map
+            worldMapRestored = true
+            view.session.run(config, options: [.removeExistingAnchors])
+        } else {
+            view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        }
 
         addReticle(to: view)
         arView = view
@@ -125,17 +145,15 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView = nil
         reticleNode = nil
         surfaceFound = false
+        lastMapping = ""
+        lastHeartbeat = 0
 
         bridge?.webView.isOpaque = true
         bridge?.webView.backgroundColor = .white
     }
 
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
-            return false
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        guard let xf = hitHorizontal(from: point, in: view) else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -148,7 +166,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         cube.firstMaterial?.metalness.contents = 0.15
 
         let node = SCNNode(geometry: cube)
-        node.simdTransform = result.worldTransform
+        node.simdTransform = xf
         node.position.y += cubeSizeM / 2
         node.eulerAngles.y = Float.random(in: 0...(2 * Float.pi))
 
@@ -160,22 +178,131 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private func updateReticle(in view: ARSCNView, frame: ARFrame) {
         guard let reticle = reticleNode else { return }
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
-            reticle.isHidden = true
-            return
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else {
+        guard let xf = hitHorizontal(from: center, in: view) else {
             reticle.isHidden = true
             return
         }
 
-        reticle.simdTransform = result.worldTransform
+        reticle.simdTransform = xf
         reticle.isHidden = false
         if !surfaceFound {
             surfaceFound = true
             notifyTracking(state: "ready", message: "Tap to place a cube")
         }
+    }
+
+    private func hitHorizontal(from point: CGPoint, in view: ARSCNView) -> simd_float4x4? {
+        if let query = view.raycastQuery(from: point, allowing: .existingPlaneGeometry, alignment: .horizontal) {
+            let hits = view.session.raycast(query)
+            if let best = pickBestHit(hits) {
+                return best.worldTransform
+            }
+        }
+        return nearMissTransform(from: point, in: view)
+    }
+
+    private func pickBestHit(_ results: [ARRaycastResult]) -> ARRaycastResult? {
+        guard !results.isEmpty else { return nil }
+        if ARPlaneAnchor.isClassificationSupported {
+            return results.min(by: { classificationRank($0) < classificationRank($1) })
+        }
+        return results.first
+    }
+
+    private func classificationRank(_ result: ARRaycastResult) -> Int {
+        guard let plane = result.anchor as? ARPlaneAnchor else { return 4 }
+        switch plane.classification {
+        case .table: return 0
+        case .seat: return 1
+        case .floor: return 2
+        default: return 3
+        }
+    }
+
+    private func nearMissTransform(from point: CGPoint, in view: ARSCNView) -> simd_float4x4? {
+        guard let query = view.raycastQuery(from: point, allowing: .existingPlaneGeometry, alignment: .horizontal),
+              let frame = view.session.currentFrame
+        else { return nil }
+        let origin = query.origin
+        let dir = simd_normalize(query.direction)
+        var bestDist = Self.nearMissSlack
+        var best: simd_float4x4?
+        for anchor in frame.anchors {
+            guard let plane = anchor as? ARPlaneAnchor, plane.alignment == .horizontal else { continue }
+            let planeY = plane.transform.columns.3.y
+            if abs(dir.y) < 1e-4 { continue }
+            let t = (planeY - origin.y) / dir.y
+            if t < 0.2 || t > 4 { continue }
+            let hit = origin + dir * t
+            let local = simd_mul(simd_inverse(plane.transform), simd_float4(hit.x, hit.y, hit.z, 1))
+            let dx = abs(local.x - plane.center.x)
+            let dz = abs(local.z - plane.center.z)
+            let outside = hypot(max(0, dx - plane.extent.x / 2), max(0, dz - plane.extent.z / 2))
+            if outside <= bestDist {
+                bestDist = outside
+                var xf = plane.transform
+                xf.columns.3 = simd_float4(hit.x, planeY, hit.z, 1)
+                best = xf
+            }
+        }
+        return best
+    }
+
+    private func softenAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+        } catch {
+            /* leave the session as-is */
+        }
+    }
+
+    private func worldMapURL() -> URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("cube-ar.arworldmap")
+    }
+
+    private func loadRecentWorldMap() -> ARWorldMap? {
+        let url = worldMapURL()
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let date = attrs[.modificationDate] as? Date,
+              Date().timeIntervalSince(date) < Self.worldMapTTL,
+              let data = try? Data(contentsOf: url),
+              let map = try? NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data)
+        else { return nil }
+        return map
+    }
+
+    private func maybePersistWorldMap(_ frame: ARFrame) {
+        guard !worldMapSaved, frame.worldMappingStatus == .mapped, let session = arView?.session else { return }
+        worldMapSaved = true
+        session.getCurrentWorldMap { [weak self] map, _ in
+            guard let self, let map,
+                  let data = try? NSKeyedArchiver.archivedData(withRootObject: map, requiringSecureCoding: true)
+            else {
+                self?.worldMapSaved = false
+                return
+            }
+            try? data.write(to: self.worldMapURL(), options: .atomic)
+        }
+    }
+
+    private func emitMapping(_ status: ARFrame.WorldMappingStatus) {
+        let key: String
+        switch status {
+        case .mapped: key = "mapped"
+        case .extending: key = "extending"
+        case .limited: key = "limited"
+        default: key = "notAvailable"
+        }
+        guard key != lastMapping else { return }
+        lastMapping = key
+        notifyListeners("mapping", data: ["status": key, "worldMapRestored": worldMapRestored])
+    }
+
+    private func emitHeartbeat(at time: TimeInterval) {
+        guard time - lastHeartbeat >= Self.heartbeatSec else { return }
+        lastHeartbeat = time
+        notifyListeners("arHeartbeat", data: [:])
     }
 
     private func notifyTracking(state: String, message: String? = nil) {
@@ -190,6 +317,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard let view = arView, let frame = view.session.currentFrame else { return }
+        emitMapping(frame.worldMappingStatus)
+        emitHeartbeat(at: time)
+        maybePersistWorldMap(frame)
         DispatchQueue.main.async { [weak self] in
             self?.updateReticle(in: view, frame: frame)
         }
