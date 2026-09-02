@@ -61,6 +61,7 @@ class CubeArPlugin : Plugin() {
     private var surfaceFound = false
     private var pendingStartCall: PluginCall? = null
     private var sessionFrameReceived = false
+    private var focusLocked = false
     private val mainHandler = Handler(Looper.getMainLooper())
     private var sessionWatchdog: Runnable? = null
     private var attachCompleted = false
@@ -313,6 +314,7 @@ class CubeArPlugin : Plugin() {
                 updateReticle(sceneView, frame)
                 when (tracking) {
                     TrackingState.TRACKING -> {
+                        lockFocusIfNeeded(sceneView)
                         if (surfaceFound) {
                             notifyTracking("ready", "Surface tracked")
                         } else {
@@ -546,9 +548,10 @@ class CubeArPlugin : Plugin() {
             val trackable = hit.trackable
             trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
         }
+        val best = pickBestPlaneHit(hits)
 
-        if (hits.isNotEmpty()) {
-            val pose = hits[0].hitPose
+        if (best != null) {
+            val pose = best.hitPose
             reticle.isVisible = true
             reticle.position = io.github.sceneview.math.Position(
                 pose.tx(),
@@ -574,11 +577,49 @@ class CubeArPlugin : Plugin() {
             val trackable = hit.trackable
             trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
         }
-        if (hits.isEmpty()) return false
-
-        val hit = hits[0]
+        val hit = pickBestPlaneHit(hits) ?: return false
         placeCube(sceneView, hit)
         return true
+    }
+
+    private fun pickBestPlaneHit(hits: List<HitResult>): HitResult? {
+        var best: HitResult? = null
+        var bestScore = Float.NEGATIVE_INFINITY
+        for (hit in hits) {
+            val plane = hit.trackable as? Plane ?: continue
+            val score = scorePlaneHit(hit, plane)
+            if (score > bestScore) {
+                bestScore = score
+                best = hit
+            }
+        }
+        return best
+    }
+
+    private fun scorePlaneHit(hit: HitResult, plane: Plane): Float {
+        val dist = hit.distance
+        var score = 0f
+        score += when {
+            dist in 0.35f..2.4f -> 3f - kotlin.math.abs(dist - 0.95f)
+            dist < 0.35f -> dist
+            else -> max(0f, 2.5f - (dist - 2.4f) * 0.4f)
+        }
+        score += kotlin.math.min(plane.extentX * plane.extentZ, 4f) * 1.2f
+        if (plane.trackingState == TrackingState.TRACKING) score += 1f
+        return score
+    }
+
+    private fun lockFocusIfNeeded(sceneView: ARSceneView) {
+        if (focusLocked) return
+        try {
+            val session = sceneView.session ?: return
+            val cfg = session.config
+            cfg.focusMode = Config.FocusMode.FIXED
+            session.configure(cfg)
+            focusLocked = true
+        } catch (_: Exception) {
+            // session may already be closing
+        }
     }
 
     private fun placeCube(sceneView: ARSceneView, hit: HitResult) {
@@ -636,6 +677,7 @@ class CubeArPlugin : Plugin() {
             materialLoader = null
             reticleNode = null
             surfaceFound = false
+            focusLocked = false
         }
         arLifecycleOwner = null
 

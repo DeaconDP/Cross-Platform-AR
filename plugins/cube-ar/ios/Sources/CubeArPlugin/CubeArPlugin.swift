@@ -20,6 +20,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var focusLocked = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -103,7 +104,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal]
+        config.isAutoFocusEnabled = true
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        focusLocked = false
 
         addReticle(to: view)
         arView = view
@@ -125,17 +128,14 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView = nil
         reticleNode = nil
         surfaceFound = false
+        focusLocked = false
 
         bridge?.webView.isOpaque = true
         bridge?.webView.backgroundColor = .white
     }
 
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
-            return false
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        guard let result = bestHorizontalHit(at: point, in: view) else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -160,12 +160,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private func updateReticle(in view: ARSCNView, frame: ARFrame) {
         guard let reticle = reticleNode else { return }
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
-            reticle.isHidden = true
-            return
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else {
+        guard let result = bestHorizontalHit(at: center, in: view) else {
             reticle.isHidden = true
             return
         }
@@ -176,6 +171,69 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             surfaceFound = true
             notifyTracking(state: "ready", message: "Tap to place a cube")
         }
+    }
+
+    private func lockFocusIfNeeded() {
+        guard !focusLocked, let view = arView,
+              let cfg = view.session.configuration as? ARWorldTrackingConfiguration
+        else { return }
+        if !cfg.isAutoFocusEnabled {
+            focusLocked = true
+            return
+        }
+        cfg.isAutoFocusEnabled = false
+        view.session.run(cfg)
+        focusLocked = true
+    }
+
+    private func bestHorizontalHit(at point: CGPoint, in view: ARSCNView) -> ARRaycastResult? {
+        guard let frame = view.session.currentFrame else { return nil }
+        var best: ARRaycastResult?
+        var bestScore: Float = -Float.greatestFiniteMagnitude
+        for allowing in [ARRaycastQuery.Target.existingPlaneGeometry, .estimatedPlane] {
+            guard let query = view.raycastQuery(from: point, allowing: allowing, alignment: .horizontal) else {
+                continue
+            }
+            for hit in view.session.raycast(query) {
+                let score = scoreHit(hit, camera: frame.camera.transform)
+                if score > bestScore {
+                    bestScore = score
+                    best = hit
+                }
+            }
+        }
+        return best
+    }
+
+    private func scoreHit(_ result: ARRaycastResult, camera: simd_float4x4) -> Float {
+        let t = result.worldTransform.columns.3
+        let c = camera.columns.3
+        let dx = t.x - c.x
+        let dy = t.y - c.y
+        let dz = t.z - c.z
+        let dist = sqrtf(dx * dx + dy * dy + dz * dz)
+        var score: Float = 0
+        if dist >= 0.35 && dist <= 2.4 {
+            score += 3 - abs(dist - 0.95)
+        } else if dist < 0.35 {
+            score += dist
+        } else {
+            score += max(0, 2.5 - (dist - 2.4) * 0.4)
+        }
+        if result.target == .existingPlaneGeometry { score += 1.5 }
+        else if result.target == .estimatedPlane { score += 0.4 }
+        if let plane = result.anchor as? ARPlaneAnchor {
+            score += min(plane.extent.x * plane.extent.z, 4) * 1.2
+            if ARPlaneAnchor.isClassificationSupported {
+                switch plane.classification {
+                case .table: score += 4
+                case .seat: score += 2.5
+                case .floor: score += 0.8
+                default: break
+                }
+            }
+        }
+        return score
     }
 
     private func notifyTracking(state: String, message: String? = nil) {
@@ -198,6 +256,7 @@ extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
     public func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
         switch camera.trackingState {
         case .normal:
+            lockFocusIfNeeded()
             notifyTracking(state: surfaceFound ? "ready" : "initializing")
         case .limited(let reason):
             notifyTracking(state: "limited", message: reason.localizedDescription)

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { pickNearestXrHit } from "./ar-hit-score";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -115,8 +116,9 @@ export async function startWebXR(
     let hits: XRHitTestResult[] = [];
     if (referenceSpace) {
       hits = frame.getHitTestResults(hitTestSource);
-      if (hits.length > 0) {
-        const pose = hits[0].getPose(referenceSpace);
+      const best = pickNearestXrHit(hits, referenceSpace);
+      if (best) {
+        const pose = best.getPose(referenceSpace);
         if (pose) {
           reticle.visible = true;
           reticle.matrix.fromArray(pose.transform.matrix);
