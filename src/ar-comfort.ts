@@ -12,6 +12,6 @@ export function comfortScale(distanceM: number): number {
   const d = Number.isFinite(distanceM)
     ? Math.max(COMFORT_MIN_DIST_M, distanceM)
     : COMFORT_TARGET_M;
-  const s = COMFORT_TARGET_M / d;
+  const s = d / COMFORT_TARGET_M;
   return Math.min(COMFORT_SCALE_MAX, Math.max(COMFORT_SCALE_MIN, s));
 }
