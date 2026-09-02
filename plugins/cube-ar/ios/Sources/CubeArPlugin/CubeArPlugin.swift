@@ -131,11 +131,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
-            return false
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        guard let result = PlaneHitPick.pick(in: view, at: point) else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -160,12 +156,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private func updateReticle(in view: ARSCNView, frame: ARFrame) {
         guard let reticle = reticleNode else { return }
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
-            reticle.isHidden = true
-            return
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else {
+        guard let result = PlaneHitPick.pick(in: view, at: center) else {
             reticle.isHidden = true
             return
         }
