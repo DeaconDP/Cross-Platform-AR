@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { readLastPlace, saveLastPlace } from "./ar-last-place";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -49,6 +50,15 @@ export function nativeARErrorMessage(err: unknown): string {
   return "Native AR failed to start. Try again once; if it persists, reinstall the app.";
 }
 
+export async function warmupNativeAR(): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    await CubeAR.warmup();
+  } catch {
+    /* startSession still asks */
+  }
+}
+
 export async function isNativeARSupported(): Promise<{
   supported: boolean;
   backend: "arkit" | "arcore" | "none";
@@ -91,10 +101,25 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  let replayed = false;
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
       overlay.hint.textContent = event.message;
+    }
+    if (event.state === "ready" && placed === 0 && !replayed) {
+      const last = readLastPlace();
+      if (last) {
+        replayed = true;
+        void CubeAR.onScreenTap({ x: last.x, y: last.y }).then((result) => {
+          if (!result.placed) return;
+          placed = result.count;
+          overlay.count.textContent = String(placed);
+          overlay.hint.textContent = "Placed where you left it — tap to add another";
+          overlay.hint.hidden = false;
+          debug.logEvent(`last-place restore (#${placed})`);
+        });
+      }
     }
     if (debug.isEnabled()) {
       debug.tickNative({
@@ -125,6 +150,7 @@ export async function startNativeAR(
         placed = result.count;
         overlay.count.textContent = String(placed);
         overlay.hint.hidden = true;
+        saveLastPlace(event.clientX * dpr, event.clientY * dpr);
         debug.logEvent(`cube placed (#${placed})`);
       }
     } catch {
