@@ -3,6 +3,9 @@ export class CubeARWeb extends WebPlugin {
     async isSupported() {
         return { supported: false, backend: "none" };
     }
+    async warmup() {
+        return { available: false, camera: false };
+    }
     async startSession(_options) {
         throw this.unavailable("Native AR is only available inside Capacitor shells.");
     }

@@ -91,6 +91,28 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun warmup(call: PluginCall) {
+        if (getPermissionState("camera") != PermissionState.GRANTED) {
+            requestPermissionForAlias("camera", call, "warmupCameraCallback")
+            return
+        }
+        resolveWarmup(call)
+    }
+
+    @PermissionCallback
+    private fun warmupCameraCallback(call: PluginCall) {
+        resolveWarmup(call)
+    }
+
+    private fun resolveWarmup(call: PluginCall) {
+        val availability = ArCoreApk.getInstance().checkAvailability(context)
+        val result = JSObject()
+        result.put("available", availability.isSupported)
+        result.put("camera", getPermissionState("camera") == PermissionState.GRANTED)
+        call.resolve(result)
+    }
+
+    @PluginMethod
     fun startSession(call: PluginCall) {
         val size = call.getDouble("cubeSizeM")?.toFloat() ?: 0.12f
         val color = call.getString("colorHex") ?: "#30d158"
