@@ -59,6 +59,9 @@ class CubeArPlugin : Plugin() {
     private var placedCount = 0
     private var reticleNode: CubeNode? = null
     private var surfaceFound = false
+    private var dwellHitStartedMs = 0L
+    private var dwellLastHitMs = 0L
+    private var lastDwellHint = ""
     private var pendingStartCall: PluginCall? = null
     private var sessionFrameReceived = false
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -78,6 +81,9 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+        private const val DWELL_MS = 800L
+        private const val LOOK_DOWN_DEG = 22f
+        private const val MISS_RESET_MS = 160L
     }
 
     @PluginMethod
@@ -98,6 +104,9 @@ class CubeArPlugin : Plugin() {
         cubeColorHex = color
         placedCount = 0
         surfaceFound = false
+        dwellHitStartedMs = 0L
+        dwellLastHitMs = 0L
+        lastDwellHint = ""
 
         if (getPermissionState("camera") == PermissionState.GRANTED) {
             ensureArCoreAndBeginSession(call)
@@ -557,11 +566,53 @@ class CubeArPlugin : Plugin() {
             )
             if (!surfaceFound) {
                 surfaceFound = true
-                notifyTracking("ready", "Tap to place a cube")
+                notifyTracking("ready", "Hold still or tap to place a cube")
             }
+            tickFirstCubeDwell(true, frame)
         } else {
             reticle.isVisible = false
+            tickFirstCubeDwell(false, frame)
         }
+    }
+
+    private fun lookDownDegrees(frame: com.google.ar.core.Frame): Float {
+        val z = frame.camera.pose.zAxis
+        val y = z[1].coerceIn(-1f, 1f)
+        return Math.toDegrees(Math.asin(y.toDouble())).toFloat()
+    }
+
+    private fun tickFirstCubeDwell(hasHit: Boolean, frame: com.google.ar.core.Frame) {
+        if (placedCount > 0) return
+        val now = System.currentTimeMillis()
+        if (hasHit) {
+            if (dwellHitStartedMs == 0L) dwellHitStartedMs = now
+            dwellLastHitMs = now
+            val progress = ((now - dwellHitStartedMs) / DWELL_MS.toFloat()).coerceAtMost(1f)
+            emitDwellHint("Hold still to place a cube.")
+            if (progress >= 1f) {
+                dwellHitStartedMs = now
+                arSceneView?.let { placeCubeAtScreen(it.width / 2f, it.height / 2f, it) }
+            }
+            return
+        }
+        if (dwellLastHitMs > 0 && now - dwellLastHitMs < MISS_RESET_MS) {
+            emitDwellHint("Hold still to place a cube.")
+            return
+        }
+        dwellHitStartedMs = 0L
+        dwellLastHitMs = 0L
+        val hint = if (lookDownDegrees(frame) < LOOK_DOWN_DEG) {
+            "Tilt the camera toward the table."
+        } else {
+            "Slowly sweep a flat surface."
+        }
+        emitDwellHint(hint)
+    }
+
+    private fun emitDwellHint(message: String) {
+        if (message == lastDwellHint) return
+        lastDwellHint = message
+        notifyTracking(if (surfaceFound) "ready" else "initializing", message)
     }
 
     private fun placeCubeAtScreen(x: Float, y: Float, sceneView: ARSceneView): Boolean {
@@ -602,6 +653,10 @@ class CubeArPlugin : Plugin() {
         anchorNode.addChildNode(cube)
         sceneView.addChildNode(anchorNode)
         placedCount++
+        val payload = JSObject()
+        payload.put("placed", true)
+        payload.put("count", placedCount)
+        notifyListeners("cubePlaced", payload)
     }
 
     private fun scheduleSessionWatchdog() {

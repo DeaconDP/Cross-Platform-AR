@@ -20,6 +20,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var dwellHitStarted: TimeInterval = 0
+    private var dwellLastHit: TimeInterval = 0
+    private var lastDwellHint = ""
+    private static let dwellMs: Double = 800
+    private static let lookDownDeg: Float = 22
+    private static let missResetMs: Double = 160
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -39,6 +45,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         cubeColorHex = call.getString("colorHex") ?? "#30d158"
         placedCount = 0
         surfaceFound = false
+        dwellHitStarted = 0
+        dwellLastHit = 0
+        lastDwellHint = ""
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -154,7 +163,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         view.scene.rootNode.addChildNode(node)
         placedCount += 1
+        notifyListeners("cubePlaced", data: ["placed": true, "count": placedCount])
         return true
+    }
+
+    private func lookDownDegrees(frame: ARFrame) -> Float {
+        asin(max(-1, min(1, frame.camera.transform.columns.2.y))) * 180 / .pi
     }
 
     private func updateReticle(in view: ARSCNView, frame: ARFrame) {
@@ -162,11 +176,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
         guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
             reticle.isHidden = true
+            tickFirstCubeDwell(hasHit: false, frame: frame)
             return
         }
         let results = view.session.raycast(query)
         guard let result = results.first else {
             reticle.isHidden = true
+            tickFirstCubeDwell(hasHit: false, frame: frame)
             return
         }
 
@@ -174,8 +190,41 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticle.isHidden = false
         if !surfaceFound {
             surfaceFound = true
-            notifyTracking(state: "ready", message: "Tap to place a cube")
+            notifyTracking(state: "ready", message: "Hold still or tap to place a cube")
         }
+        tickFirstCubeDwell(hasHit: true, frame: frame)
+    }
+
+    private func tickFirstCubeDwell(hasHit: Bool, frame: ARFrame) {
+        guard placedCount == 0 else { return }
+        let now = CACurrentMediaTime()
+        if hasHit {
+            if dwellHitStarted == 0 { dwellHitStarted = now }
+            dwellLastHit = now
+            let progress = min(1, (now - dwellHitStarted) / Self.dwellMs)
+            emitDwellHint("Hold still to place a cube.")
+            if progress >= 1, let view = arView {
+                dwellHitStarted = now
+                _ = placeCube(at: CGPoint(x: view.bounds.midX, y: view.bounds.midY), in: view)
+            }
+            return
+        }
+        if dwellLastHit > 0, now - dwellLastHit < Self.missResetMs {
+            emitDwellHint("Hold still to place a cube.")
+            return
+        }
+        dwellHitStarted = 0
+        dwellLastHit = 0
+        let hint = lookDownDegrees(frame: frame) < Self.lookDownDeg
+            ? "Tilt the camera toward the table."
+            : "Slowly sweep a flat surface."
+        emitDwellHint(hint)
+    }
+
+    private func emitDwellHint(_ message: String) {
+        guard message != lastDwellHint else { return }
+        lastDwellHint = message
+        notifyTracking(state: surfaceFound ? "ready" : "initializing", message: message)
     }
 
     private func notifyTracking(state: String, message: String? = nil) {

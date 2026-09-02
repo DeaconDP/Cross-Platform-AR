@@ -1,6 +1,12 @@
 import * as THREE from "three";
 import { createCube, createLights } from "./scene";
 import {
+  createDwellState,
+  dwellHintText,
+  lookDownDegFromForwardY,
+  updateDwell,
+} from "./arDwell";
+import {
   type CompatSnapshot,
   DebugCollector,
   resetDebugOverlay,
@@ -72,11 +78,13 @@ export async function startWebXR(
   const unbindSession = debug.bindSession(session);
 
   let placed = 0;
+  let dwell = createDwellState();
+  const look = new THREE.Vector3();
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
-  session.addEventListener("select", () => {
+  const dropCube = () => {
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
@@ -84,8 +92,18 @@ export async function startWebXR(
     scene.add(cube);
     placed++;
     overlay.count.textContent = String(placed);
-    overlay.hint.hidden = true;
+    overlay.hint.hidden = placed > 0;
+    dwell = updateDwell(dwell, {
+      now: performance.now(),
+      hasHit: true,
+      lookDownDeg: 90,
+      placed: true,
+    });
     debug.logEvent(`cube placed (#${placed})`);
+  };
+
+  session.addEventListener("select", () => {
+    dropCube();
   });
 
   const onExit = () => session.end();
@@ -124,12 +142,30 @@ export async function startWebXR(
           if (!surfaceFound) {
             surfaceFound = true;
             debug.logEvent("surface found");
-            if (placed === 0) overlay.hint.textContent = "Tap to place a cube";
+            if (placed === 0) overlay.hint.textContent = "Hold still or tap to place a cube";
           }
         }
       } else {
         reticle.visible = false;
       }
+    }
+
+    if (placed === 0) {
+      const xrCam = renderer.xr.getCamera();
+      xrCam.updateMatrixWorld();
+      look.set(0, 0, -1).transformDirection(xrCam.matrixWorld);
+      dwell = updateDwell(dwell, {
+        now: performance.now(),
+        hasHit: reticle.visible,
+        lookDownDeg: lookDownDegFromForwardY(look.y),
+        placed: false,
+      });
+      const copy = dwellHintText(dwell.hint);
+      if (copy) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = copy;
+      }
+      if (dwell.ready) dropCube();
     }
 
     if (debug.isEnabled()) {

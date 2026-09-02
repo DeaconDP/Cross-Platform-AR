@@ -91,10 +91,18 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const placedListener = await CubeAR.addListener("cubePlaced", (event) => {
+    placed = event.count;
+    overlay.count.textContent = String(placed);
+    overlay.hint.hidden = placed > 0;
+    debug.logEvent(`cube placed (#${placed})`);
+  });
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
       overlay.hint.textContent = event.message;
+      overlay.hint.hidden = false;
     }
     if (debug.isEnabled()) {
       debug.tickNative({
@@ -158,6 +166,7 @@ export async function startNativeAR(
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
+    placedListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();
