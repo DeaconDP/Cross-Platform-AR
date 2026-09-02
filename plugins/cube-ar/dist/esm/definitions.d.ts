@@ -16,6 +16,9 @@ export interface CubeARTapResult {
     placed: boolean;
     count: number;
 }
+export interface CubeARRotateOptions {
+    radians: number;
+}
 export interface CubeARTrackingEvent {
     state: "initializing" | "ready" | "limited" | "unavailable";
     message?: string;
@@ -25,6 +28,7 @@ export interface CubeARPlugin {
     startSession(options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+    rotateLast(options: CubeARRotateOptions): Promise<void>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;
     removeAllListeners(): Promise<void>;

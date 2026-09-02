@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async rotateLast(_options) {
+        // no-op on web — WebXR path yaws in JS
+    }
 }

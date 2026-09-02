@@ -72,6 +72,7 @@ export async function startWebXR(
   const unbindSession = debug.bindSession(session);
 
   let placed = 0;
+  let lastCube: THREE.Object3D | null = null;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
@@ -82,11 +83,43 @@ export async function startWebXR(
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
     cube.rotateY(Math.random() * Math.PI * 2);
     scene.add(cube);
+    lastCube = cube;
     placed++;
     overlay.count.textContent = String(placed);
     overlay.hint.hidden = true;
     debug.logEvent(`cube placed (#${placed})`);
   });
+
+  const fingers = new Map<number, { x: number; y: number }>();
+  let lastTwist = 0;
+  const onTwistDown = (event: PointerEvent) => {
+    if ((event.target as HTMLElement | null)?.closest(".ar-exit, .ar-debug-toggle")) return;
+    fingers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (fingers.size === 2) {
+      const pts = [...fingers.values()];
+      lastTwist = Math.atan2(pts[1]!.y - pts[0]!.y, pts[1]!.x - pts[0]!.x);
+    }
+  };
+  const onTwistMove = (event: PointerEvent) => {
+    if (!fingers.has(event.pointerId) || !lastCube) return;
+    fingers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (fingers.size < 2) return;
+    const pts = [...fingers.values()];
+    const ang = Math.atan2(pts[1]!.y - pts[0]!.y, pts[1]!.x - pts[0]!.x);
+    let d = ang - lastTwist;
+    if (d > Math.PI) d -= Math.PI * 2;
+    if (d < -Math.PI) d += Math.PI * 2;
+    lastTwist = ang;
+    if (Math.abs(d) > 0.002) lastCube.rotateY(d);
+  };
+  const onTwistUp = (event: PointerEvent) => {
+    fingers.delete(event.pointerId);
+    if (fingers.size < 2) lastTwist = 0;
+  };
+  overlay.root.addEventListener("pointerdown", onTwistDown);
+  overlay.root.addEventListener("pointermove", onTwistMove);
+  overlay.root.addEventListener("pointerup", onTwistUp);
+  overlay.root.addEventListener("pointercancel", onTwistUp);
 
   const onExit = () => session.end();
   overlay.exit.addEventListener("click", onExit);
@@ -124,7 +157,7 @@ export async function startWebXR(
           if (!surfaceFound) {
             surfaceFound = true;
             debug.logEvent("surface found");
-            if (placed === 0) overlay.hint.textContent = "Tap to place a cube";
+            if (placed === 0) overlay.hint.textContent = "Tap to place · twist two fingers to turn";
           }
         }
       } else {
@@ -156,6 +189,10 @@ export async function startWebXR(
     session.addEventListener("end", () => resolve(), { once: true });
   });
 
+  overlay.root.removeEventListener("pointerdown", onTwistDown);
+  overlay.root.removeEventListener("pointermove", onTwistMove);
+  overlay.root.removeEventListener("pointerup", onTwistUp);
+  overlay.root.removeEventListener("pointercancel", onTwistUp);
   overlay.exit.removeEventListener("click", onExit);
   unwireDebug();
   unbindSession();

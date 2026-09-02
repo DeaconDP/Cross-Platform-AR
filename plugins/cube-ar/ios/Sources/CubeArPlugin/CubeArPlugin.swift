@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "rotateLast", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var lastCube: SCNNode?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -78,6 +80,14 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func rotateLast(_ call: CAPPluginCall) {
+        let radians = call.getFloat("radians") ?? 0
+        DispatchQueue.main.async { [weak self] in
+            self?.lastCube?.eulerAngles.y += radians
+            call.resolve()
+        }
+    }
+
     private func attachArView() throws {
         detachArView()
 
@@ -124,6 +134,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView?.removeFromSuperview()
         arView = nil
         reticleNode = nil
+        lastCube = nil
         surfaceFound = false
 
         bridge?.webView.isOpaque = true
@@ -153,6 +164,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         node.eulerAngles.y = Float.random(in: 0...(2 * Float.pi))
 
         view.scene.rootNode.addChildNode(node)
+        lastCube = node
         placedCount += 1
         return true
     }

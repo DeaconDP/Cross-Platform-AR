@@ -1,6 +1,7 @@
 import { WebPlugin } from "@capacitor/core";
 import type {
   CubeARPlugin,
+  CubeARRotateOptions,
   CubeARSessionOptions,
   CubeARSupportResult,
   CubeARTapOptions,
@@ -22,5 +23,9 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
 
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
+  }
+
+  async rotateLast(_options: CubeARRotateOptions): Promise<void> {
+    // no-op on web — WebXR path yaws in JS
   }
 }
