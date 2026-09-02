@@ -193,6 +193,22 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun status(call: PluginCall) {
+        val tracking = when (arSceneView?.frame?.camera?.trackingState) {
+            TrackingState.TRACKING -> if (surfaceFound) "ready" else "initializing"
+            TrackingState.PAUSED -> "limited"
+            TrackingState.STOPPED -> "unavailable"
+            else -> if (arSceneView == null) "unavailable" else "initializing"
+        }
+        val result = JSObject()
+        result.put("tracking", tracking)
+        result.put("planeCount", if (surfaceFound) 1 else 0)
+        result.put("modelReady", true)
+        result.put("placed", placedCount > 0)
+        call.resolve(result)
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")

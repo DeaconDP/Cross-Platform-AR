@@ -27,11 +27,19 @@ export interface CubeARTrackingEvent {
   message?: string;
 }
 
+export interface CubeARStatus {
+  tracking: CubeARTrackingEvent["state"];
+  planeCount: number;
+  modelReady: boolean;
+  placed: boolean;
+}
+
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  status(): Promise<CubeARStatus>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,

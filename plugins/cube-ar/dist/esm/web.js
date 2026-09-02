@@ -12,4 +12,12 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async status() {
+        return {
+            tracking: "unavailable",
+            planeCount: 0,
+            modelReady: false,
+            placed: false,
+        };
+    }
 }

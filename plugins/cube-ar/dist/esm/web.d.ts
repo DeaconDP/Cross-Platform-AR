@@ -5,4 +5,10 @@ export declare class CubeARWeb extends WebPlugin implements CubeARPlugin {
     startSession(_options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult>;
+    status(): Promise<{
+        tracking: "unavailable";
+        planeCount: number;
+        modelReady: boolean;
+        placed: boolean;
+    }>;
 }

@@ -6,7 +6,7 @@ Tap-to-place cube on Android (WebXR) and iOS (AR Quick Look), inline preview els
 
 ## v0.2 — AR path showcase (current)
 
-Landing screen lists every available AR route with labels (Native ARKit/ARCore, WebXR, Quick Look, Chrome handoff). Local `cube-ar` Capacitor plugin for in-app native tap-to-place on iOS and Android.
+Landing screen lists every available AR route with labels (Native ARKit/ARCore, WebXR, Quick Look, Chrome handoff). Local `cube-ar` Capacitor plugin for in-app native tap-to-place on iOS and Android. Stable iOS lights + `status()` probe (2026-09-02).
 
 ## Ideas / later
 
