@@ -10,6 +10,6 @@ export class CubeARWeb extends WebPlugin {
         // no-op
     }
     async onScreenTap(_options) {
-        return { placed: false, count: 0 };
+        return { placed: false, count: 0, reason: "notReady" };
     }
 }

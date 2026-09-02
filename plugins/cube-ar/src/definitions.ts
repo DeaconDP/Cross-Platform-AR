@@ -20,6 +20,7 @@ export interface CubeARTapOptions {
 export interface CubeARTapResult {
   placed: boolean;
   count: number;
+  reason?: string;
 }
 
 export interface CubeARTrackingEvent {

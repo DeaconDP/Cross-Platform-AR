@@ -29,7 +29,6 @@ import com.getcapacitor.Logger
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.HitResult
-import com.google.ar.core.Plane
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
 import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationException
@@ -67,6 +66,7 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private val viewHit = ArViewHit()
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -209,6 +209,7 @@ class CubeArPlugin : Plugin() {
                 val result = JSObject()
                 result.put("placed", false)
                 result.put("count", placedCount)
+                result.put("reason", "notReady")
                 call.resolve(result)
                 return@executeOnMainThread
             }
@@ -217,6 +218,7 @@ class CubeArPlugin : Plugin() {
             val result = JSObject()
             result.put("placed", placed)
             result.put("count", placedCount)
+            if (!placed) result.put("reason", viewHit.miss)
             call.resolve(result)
         }
     }
@@ -539,16 +541,15 @@ class CubeArPlugin : Plugin() {
 
     private fun updateReticle(sceneView: ARSceneView, frame: com.google.ar.core.Frame) {
         val reticle = reticleNode ?: return
-        val hits = frame.hitTest(
-            sceneView.width / 2f,
-            sceneView.height / 2f,
-        ).filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
-
-        if (hits.isNotEmpty()) {
-            val pose = hits[0].hitPose
+        val hit = viewHit.hitHorizontal(
+            frame,
+            0.5f,
+            0.5f,
+            sceneView.width,
+            sceneView.height,
+        )
+        if (hit != null) {
+            val pose = hit.hitPose
             reticle.isVisible = true
             reticle.position = io.github.sceneview.math.Position(
                 pose.tx(),
@@ -565,18 +566,19 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun placeCubeAtScreen(x: Float, y: Float, sceneView: ARSceneView): Boolean {
-        val frame = sceneView.frame
-        if (frame == null) {
-            return false
+        val nx: Float
+        val ny: Float
+        if (x in 0f..1f && y in 0f..1f) {
+            nx = x
+            ny = y
+        } else {
+            val w = sceneView.width.coerceAtLeast(1)
+            val h = sceneView.height.coerceAtLeast(1)
+            nx = (x / w).coerceIn(0f, 1f)
+            ny = (y / h).coerceIn(0f, 1f)
         }
-        val allHits = frame.hitTest(x, y)
-        val hits = allHits.filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
-        if (hits.isEmpty()) return false
-
-        val hit = hits[0]
+        val hit = viewHit.hitHorizontal(sceneView.frame, nx, ny, sceneView.width, sceneView.height)
+            ?: return false
         placeCube(sceneView, hit)
         return true
     }
