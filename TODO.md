@@ -10,6 +10,7 @@
 - [x] Capacitor android/ios shells + camera (and related) permissions
 - [x] Android Cap → Chrome Custom Tabs handoff when WebXR unavailable
 - [x] Native AR Cap plugin (ARKit iOS + ARCore Android) + showcase multi-path landing
+- [x] Analytic camera-ray ∩ tracked-plane place/reticle fallback + display-geometry refresh (`src/ar-ray-plane.ts`)
 - [x] Android native AR: runtime CAMERA permission + ARCore install gate before session start
 - [x] Android 16 KB page size: arsceneview 2.3.0 + 16k Gradle packaging (Filament/ARCore native libs)
 - [ ] Verify on a real ARCore Android phone over LAN (browser WebXR)

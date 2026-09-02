@@ -28,7 +28,6 @@ import com.getcapacitor.annotation.PermissionCallback
 import com.getcapacitor.Logger
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
-import com.google.ar.core.HitResult
 import com.google.ar.core.Plane
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
@@ -67,6 +66,9 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var lastDisplayW = 0
+    private var lastDisplayH = 0
+    private var lastDisplayRotation = Int.MIN_VALUE
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -309,6 +311,7 @@ class CubeArPlugin : Plugin() {
                     sessionFrameReceived = true
                     cancelSessionWatchdog()
                 }
+                syncDisplayGeometry(sceneView)
                 val tracking = frame.camera.trackingState
                 updateReticle(sceneView, frame)
                 when (tracking) {
@@ -547,8 +550,12 @@ class CubeArPlugin : Plugin() {
             trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
         }
 
-        if (hits.isNotEmpty()) {
-            val pose = hits[0].hitPose
+        val pose = if (hits.isNotEmpty()) {
+            hits[0].hitPose
+        } else {
+            ArRayPlane.pick(sceneView.session, frame, 0.5f, 0.5f)
+        }
+        if (pose != null) {
             reticle.isVisible = true
             reticle.position = io.github.sceneview.math.Position(
                 pose.tx(),
@@ -574,17 +581,21 @@ class CubeArPlugin : Plugin() {
             val trackable = hit.trackable
             trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
         }
-        if (hits.isEmpty()) return false
-
-        val hit = hits[0]
-        placeCube(sceneView, hit)
+        if (hits.isNotEmpty()) {
+            placeCube(sceneView, hits[0].createAnchor())
+            return true
+        }
+        val w = max(sceneView.width, 1)
+        val h = max(sceneView.height, 1)
+        val pose = ArRayPlane.pick(sceneView.session, frame, x / w, y / h) ?: return false
+        val session = sceneView.session ?: return false
+        placeCube(sceneView, session.createAnchor(pose))
         return true
     }
 
-    private fun placeCube(sceneView: ARSceneView, hit: HitResult) {
+    private fun placeCube(sceneView: ARSceneView, anchor: com.google.ar.core.Anchor) {
         val loader = materialLoader ?: return
         val (r, g, b) = parseHexColor(cubeColorHex)
-        val anchor = hit.createAnchor()
         val anchorNode = AnchorNode(sceneView.engine, anchor)
         // Matte non-metal so diffuse color reads under the fixed directional light.
         val material = loader.createColorInstance(
@@ -629,6 +640,9 @@ class CubeArPlugin : Plugin() {
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
+        lastDisplayW = 0
+        lastDisplayH = 0
+        lastDisplayRotation = Int.MIN_VALUE
         stopImuWarmup()
         arSceneView?.let { view ->
             safeDestroySceneView(view)
@@ -642,6 +656,19 @@ class CubeArPlugin : Plugin() {
         val webView = bridge.webView
         webView.setBackgroundColor(Color.WHITE)
         webView.setLayerType(View.LAYER_TYPE_NONE, null)
+    }
+
+    private fun syncDisplayGeometry(sceneView: ARSceneView) {
+        val session = sceneView.session ?: return
+        val w = sceneView.width
+        val h = sceneView.height
+        if (w <= 0 || h <= 0) return
+        val rot = activity?.windowManager?.defaultDisplay?.rotation ?: return
+        if (w == lastDisplayW && h == lastDisplayH && rot == lastDisplayRotation) return
+        lastDisplayW = w
+        lastDisplayH = h
+        lastDisplayRotation = rot
+        ArRayPlane.syncDisplayGeometry(session, rot, w, h)
     }
 
     private fun parseHexColor(hex: String): Triple<Float, Float, Float> {
