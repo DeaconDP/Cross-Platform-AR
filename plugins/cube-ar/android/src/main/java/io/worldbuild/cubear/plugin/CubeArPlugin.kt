@@ -29,7 +29,6 @@ import com.getcapacitor.Logger
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.HitResult
-import com.google.ar.core.Plane
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
 import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationException
@@ -539,16 +538,15 @@ class CubeArPlugin : Plugin() {
 
     private fun updateReticle(sceneView: ARSceneView, frame: com.google.ar.core.Frame) {
         val reticle = reticleNode ?: return
-        val hits = frame.hitTest(
-            sceneView.width / 2f,
-            sceneView.height / 2f,
-        ).filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
+        val hit = PlaneHitPick.bestHorizontal(
+            frame.hitTest(
+                sceneView.width / 2f,
+                sceneView.height / 2f,
+            ),
+        )
 
-        if (hits.isNotEmpty()) {
-            val pose = hits[0].hitPose
+        if (hit != null) {
+            val pose = hit.hitPose
             reticle.isVisible = true
             reticle.position = io.github.sceneview.math.Position(
                 pose.tx(),
@@ -569,14 +567,7 @@ class CubeArPlugin : Plugin() {
         if (frame == null) {
             return false
         }
-        val allHits = frame.hitTest(x, y)
-        val hits = allHits.filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
-        if (hits.isEmpty()) return false
-
-        val hit = hits[0]
+        val hit = PlaneHitPick.bestHorizontal(frame.hitTest(x, y)) ?: return false
         placeCube(sceneView, hit)
         return true
     }

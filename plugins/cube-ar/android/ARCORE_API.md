@@ -60,7 +60,7 @@ flowchart TB
 | **`HitResult.hitPose`** | reticle position | World-space reticle transform |
 | **`HitResult.createAnchor()`** | `placeCube()` | Anchors placed cube to real world |
 | **`HitResult.trackable`** | hit filtering | Only accept hits on planes |
-| **`Plane`** | hit filter | `trackable is Plane && plane.isPoseInPolygon(hitPose)` |
+| **`Plane`** | hit filter | `PlaneHitPick`: TRACKING + horizontal + in-polygon, then table/seat/floor rank + 4 cm inset |
 | **`TrackingState`** | tracking callback | `TRACKING` / `PAUSED` / `STOPPED` → initializing / limited / unavailable |
 | **`UnavailableUserDeclinedInstallationException`** | install gate | User-facing “ARCore install declined” |
 | **`UnavailableDeviceNotCompatibleException`** | install gate | User-facing “not supported on this device” |
