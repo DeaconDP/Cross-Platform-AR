@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { mappingCoach, parseMappingStatus } from "./ar-mapping";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -93,7 +94,7 @@ export async function startNativeAR(
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    if (event.message && placed === 0 && !overlay.hint.dataset.mapping) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
@@ -103,6 +104,19 @@ export async function startNativeAR(
         placed,
         backend: snapshot.platform === "ios" ? "arkit" : "arcore",
       });
+    }
+  });
+
+  const mappingListener = await CubeAR.addListener("mapping", (event) => {
+    if (placed !== 0) return;
+    const copy = mappingCoach(parseMappingStatus(event.status), {
+      restored: event.worldMapRestored,
+    });
+    if (copy) {
+      overlay.hint.dataset.mapping = "1";
+      overlay.hint.textContent = copy;
+    } else {
+      delete overlay.hint.dataset.mapping;
     }
   });
 
@@ -158,6 +172,7 @@ export async function startNativeAR(
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
+    mappingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();
