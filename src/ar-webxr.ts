@@ -80,6 +80,7 @@ export async function startWebXR(
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
+    cube.quaternion.identity();
     cube.rotateY(Math.random() * Math.PI * 2);
     scene.add(cube);
     placed++;
