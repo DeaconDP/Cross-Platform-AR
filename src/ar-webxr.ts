@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { isInFrontFromMatrix } from "./ar-hit-sane";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -115,9 +116,20 @@ export async function startWebXR(
     let hits: XRHitTestResult[] = [];
     if (referenceSpace) {
       hits = frame.getHitTestResults(hitTestSource);
+      const viewerPose = frame.getViewerPose(referenceSpace);
       if (hits.length > 0) {
         const pose = hits[0].getPose(referenceSpace);
-        if (pose) {
+        const hitPos = pose?.transform.position;
+        const inFront =
+          pose &&
+          viewerPose &&
+          hitPos &&
+          isInFrontFromMatrix(viewerPose.transform.matrix, {
+            x: hitPos.x,
+            y: hitPos.y,
+            z: hitPos.z,
+          });
+        if (pose && inFront) {
           reticle.visible = true;
           reticle.matrix.fromArray(pose.transform.matrix);
           reticle.matrix.decompose(reticlePos, reticle.quaternion, reticle.scale);
@@ -126,6 +138,8 @@ export async function startWebXR(
             debug.logEvent("surface found");
             if (placed === 0) overlay.hint.textContent = "Tap to place a cube";
           }
+        } else {
+          reticle.visible = false;
         }
       } else {
         reticle.visible = false;

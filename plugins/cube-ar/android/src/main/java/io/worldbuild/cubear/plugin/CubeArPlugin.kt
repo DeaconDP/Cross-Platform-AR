@@ -27,9 +27,11 @@ import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import com.getcapacitor.Logger
 import com.google.ar.core.ArCoreApk
+import com.google.ar.core.Camera
 import com.google.ar.core.Config
 import com.google.ar.core.HitResult
 import com.google.ar.core.Plane
+import com.google.ar.core.Pose
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
 import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationException
@@ -87,6 +89,8 @@ class CubeArPlugin : Plugin() {
         val result = JSObject()
         result.put("supported", supported)
         result.put("backend", if (supported) "arcore" else "none")
+        result.put("plane", supported)
+        result.put("image", false)
         call.resolve(result)
     }
 
@@ -539,13 +543,14 @@ class CubeArPlugin : Plugin() {
 
     private fun updateReticle(sceneView: ARSceneView, frame: com.google.ar.core.Frame) {
         val reticle = reticleNode ?: return
+        if (frame.camera.trackingState != TrackingState.TRACKING) {
+            reticle.isVisible = false
+            return
+        }
         val hits = frame.hitTest(
             sceneView.width / 2f,
             sceneView.height / 2f,
-        ).filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
+        ).filter { hit -> isLivePlaneHit(frame.camera, hit) }
 
         if (hits.isNotEmpty()) {
             val pose = hits[0].hitPose
@@ -569,16 +574,33 @@ class CubeArPlugin : Plugin() {
         if (frame == null) {
             return false
         }
+        if (frame.camera.trackingState != TrackingState.TRACKING) return false
         val allHits = frame.hitTest(x, y)
-        val hits = allHits.filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
+        val hits = allHits.filter { hit -> isLivePlaneHit(frame.camera, hit) }
         if (hits.isEmpty()) return false
 
         val hit = hits[0]
         placeCube(sceneView, hit)
         return true
+    }
+
+    private fun isLivePlaneHit(camera: Camera, hit: HitResult): Boolean {
+        val trackable = hit.trackable
+        if (trackable !is Plane) return false
+        if (trackable.trackingState != TrackingState.TRACKING) return false
+        if (!trackable.isPoseInPolygon(hit.hitPose)) return false
+        return isInFront(camera, hit.hitPose)
+    }
+
+    /** Camera looks along local −Z; reject hits behind the phone. */
+    private fun isInFront(camera: Camera, hitPose: Pose): Boolean {
+        val cam = camera.pose
+        val dx = hitPose.tx() - cam.tx()
+        val dy = hitPose.ty() - cam.ty()
+        val dz = hitPose.tz() - cam.tz()
+        val z = FloatArray(3)
+        cam.getZAxis(z, 0)
+        return -(z[0] * dx + z[1] * dy + z[2] * dz) > 0.02f
     }
 
     private fun placeCube(sceneView: ARSceneView, hit: HitResult) {

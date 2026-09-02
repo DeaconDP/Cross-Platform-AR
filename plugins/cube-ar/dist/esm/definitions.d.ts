@@ -3,6 +3,8 @@ export type CubeARBackend = "arkit" | "arcore" | "none";
 export interface CubeARSupportResult {
     supported: boolean;
     backend: CubeARBackend;
+    plane?: boolean;
+    image?: boolean;
 }
 export interface CubeARSessionOptions {
     cubeSizeM: number;
