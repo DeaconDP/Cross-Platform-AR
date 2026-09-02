@@ -14,6 +14,7 @@
 - [x] Android 16 KB page size: arsceneview 2.3.0 + 16k Gradle packaging (Filament/ARCore native libs)
 - [ ] Verify on a real ARCore Android phone over LAN (browser WebXR)
 - [x] Verify Capacitor Android native AR path (ARCore tap-to-place) — IMU warmup + HIGH_SAMPLING_RATE_SENSORS; live camera on SM-A266B (Samsung sensor HAL / ARCore 1.54)
+- [x] Native fat-finger multi-sample + sticky miss latch (~250ms) so first cube taps land while planes form — 2026-09-02
 - [ ] Verify Capacitor Android build opens Chrome with VITE_AR_ORIGIN
 - [ ] Verify on a real iPhone (Safari Quick Look + Cap native ARKit + Cap Quick Look)
 - [ ] Set Xcode DEVELOPMENT_TEAM to d@worldbuild.io team ID and run on device

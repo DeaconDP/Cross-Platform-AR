@@ -60,6 +60,10 @@ class CubeArPlugin : Plugin() {
     private var reticleNode: CubeNode? = null
     private var surfaceFound = false
     private var pendingStartCall: PluginCall? = null
+    private var pendingTapCall: PluginCall? = null
+    private var latchX = 0f
+    private var latchY = 0f
+    private var latchFrames = 0
     private var sessionFrameReceived = false
     private val mainHandler = Handler(Looper.getMainLooper())
     private var sessionWatchdog: Runnable? = null
@@ -78,6 +82,15 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+        private const val HIT_SAMPLE_RADIUS_PX = 28f
+        private const val HIT_LATCH_FRAMES = 15
+        private val HIT_SAMPLE_OFFSETS = arrayOf(
+            floatArrayOf(0f, 0f),
+            floatArrayOf(1f, 0f), floatArrayOf(-1f, 0f),
+            floatArrayOf(0f, 1f), floatArrayOf(0f, -1f),
+            floatArrayOf(0.7f, 0.7f), floatArrayOf(0.7f, -0.7f),
+            floatArrayOf(-0.7f, 0.7f), floatArrayOf(-0.7f, -0.7f),
+        )
     }
 
     @PluginMethod
@@ -204,6 +217,7 @@ class CubeArPlugin : Plugin() {
         }
 
         bridge.executeOnMainThread {
+            cancelTapLatch(false)
             val view = arSceneView
             if (view == null) {
                 val result = JSObject()
@@ -214,10 +228,18 @@ class CubeArPlugin : Plugin() {
             }
 
             val placed = placeCubeAtScreen(x, y, view)
-            val result = JSObject()
-            result.put("placed", placed)
-            result.put("count", placedCount)
-            call.resolve(result)
+            if (placed) {
+                val result = JSObject()
+                result.put("placed", true)
+                result.put("count", placedCount)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
+            call.setKeepAlive(true)
+            pendingTapCall = call
+            latchX = x
+            latchY = y
+            latchFrames = HIT_LATCH_FRAMES
         }
     }
 
@@ -311,6 +333,9 @@ class CubeArPlugin : Plugin() {
                 }
                 val tracking = frame.camera.trackingState
                 updateReticle(sceneView, frame)
+                if (latchFrames > 0) {
+                    consumeTapLatch(sceneView)
+                }
                 when (tracking) {
                     TrackingState.TRACKING -> {
                         if (surfaceFound) {
@@ -565,20 +590,69 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun placeCubeAtScreen(x: Float, y: Float, sceneView: ARSceneView): Boolean {
-        val frame = sceneView.frame
-        if (frame == null) {
-            return false
-        }
-        val allHits = frame.hitTest(x, y)
-        val hits = allHits.filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
-        if (hits.isEmpty()) return false
-
-        val hit = hits[0]
+        val frame = sceneView.frame ?: return false
+        val w = sceneView.width.toFloat()
+        val h = sceneView.height.toFloat()
+        if (w <= 0f || h <= 0f) return false
+        val hit = hitHorizontal(frame, x, y, w, h) ?: return false
         placeCube(sceneView, hit)
         return true
+    }
+
+    private fun hitHorizontal(
+        frame: com.google.ar.core.Frame,
+        x: Float,
+        y: Float,
+        w: Float,
+        h: Float,
+    ): HitResult? {
+        var best: HitResult? = null
+        var bestDist = Float.MAX_VALUE
+        for (off in HIT_SAMPLE_OFFSETS) {
+            val sx = (x + off[0] * HIT_SAMPLE_RADIUS_PX).coerceIn(0f, w)
+            val sy = (y + off[1] * HIT_SAMPLE_RADIUS_PX).coerceIn(0f, h)
+            val hits = frame.hitTest(sx, sy).filter { hit ->
+                val trackable = hit.trackable
+                trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
+            }
+            if (hits.isEmpty()) continue
+            val dx = sx - x
+            val dy = sy - y
+            val dist = dx * dx + dy * dy
+            if (dist < bestDist) {
+                bestDist = dist
+                best = hits[0]
+            }
+            if (dist == 0f) break
+        }
+        return best
+    }
+
+    private fun consumeTapLatch(sceneView: ARSceneView) {
+        if (latchFrames <= 0) return
+        latchFrames--
+        if (placeCubeAtScreen(latchX, latchY, sceneView)) {
+            resolvePendingTap(true)
+            return
+        }
+        if (latchFrames <= 0) {
+            resolvePendingTap(false)
+        }
+    }
+
+    private fun resolvePendingTap(placed: Boolean) {
+        latchFrames = 0
+        val call = pendingTapCall ?: return
+        pendingTapCall = null
+        val result = JSObject()
+        result.put("placed", placed)
+        result.put("count", placedCount)
+        call.resolve(result)
+    }
+
+    private fun cancelTapLatch(placed: Boolean) {
+        if (pendingTapCall == null && latchFrames <= 0) return
+        resolvePendingTap(placed)
     }
 
     private fun placeCube(sceneView: ARSceneView, hit: HitResult) {
@@ -626,6 +700,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        cancelTapLatch(false)
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
