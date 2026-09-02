@@ -20,6 +20,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var missReason = "noSurface"
+    private var lastViewW: CGFloat = 0
+    private var lastViewH: CGFloat = 0
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -73,8 +76,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
 
-            let placed = self.placeCube(at: CGPoint(x: CGFloat(x), y: CGFloat(y)), in: view)
-            call.resolve(["placed": placed, "count": self.placedCount])
+            let placed = self.placeCube(atNormX: CGFloat(x), ny: CGFloat(y), in: view)
+            if placed {
+                call.resolve(["placed": true, "count": self.placedCount])
+            } else {
+                call.resolve(["placed": false, "count": self.placedCount, "reason": self.missReason])
+            }
         }
     }
 
@@ -130,12 +137,42 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         bridge?.webView.backgroundColor = .white
     }
 
-    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
+    private func viewPoint(nx: CGFloat, ny: CGFloat, in view: ARSCNView) -> CGPoint? {
+        var w = view.bounds.width
+        var h = view.bounds.height
+        if w > 0 { lastViewW = w }
+        if h > 0 { lastViewH = h }
+        if w <= 0 { w = lastViewW }
+        if h <= 0 { h = lastViewH }
+        guard w > 0, h > 0 else { return nil }
+        if nx >= 0, nx <= 1, ny >= 0, ny <= 1 {
+            return CGPoint(x: nx * w, y: ny * h)
+        }
+        return CGPoint(x: nx, y: ny)
+    }
+
+    private func placeCube(atNormX nx: CGFloat, ny: CGFloat, in view: ARSCNView) -> Bool {
+        guard let frame = view.session.currentFrame else {
+            missReason = "notReady"
+            return false
+        }
+        if case .notAvailable = frame.camera.trackingState {
+            missReason = "notTracking"
+            return false
+        }
+        guard let point = viewPoint(nx: nx, ny: ny, in: view) else {
+            missReason = "notReady"
+            return false
+        }
         guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
+            missReason = "noSurface"
             return false
         }
         let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        guard let result = results.first else {
+            missReason = "noSurface"
+            return false
+        }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -159,7 +196,14 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func updateReticle(in view: ARSCNView, frame: ARFrame) {
         guard let reticle = reticleNode else { return }
-        let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        if case .notAvailable = frame.camera.trackingState {
+            reticle.isHidden = true
+            return
+        }
+        guard let center = viewPoint(nx: 0.5, ny: 0.5, in: view) else {
+            reticle.isHidden = true
+            return
+        }
         guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
             reticle.isHidden = true
             return

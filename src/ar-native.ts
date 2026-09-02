@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { clientToViewNorm, missHint } from "./ar-view-hit";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -114,18 +115,21 @@ export async function startNativeAR(
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
-    // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
-    const dpr = window.devicePixelRatio || 1;
+    const { x, y } = clientToViewNorm(
+      event.clientX,
+      event.clientY,
+      overlay.root.getBoundingClientRect(),
+    );
     try {
-      const result = await CubeAR.onScreenTap({
-        x: event.clientX * dpr,
-        y: event.clientY * dpr,
-      });
+      const result = await CubeAR.onScreenTap({ x, y });
       if (result.placed) {
         placed = result.count;
         overlay.count.textContent = String(placed);
         overlay.hint.hidden = true;
         debug.logEvent(`cube placed (#${placed})`);
+      } else {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = missHint(result.reason);
       }
     } catch {
       debug.logEvent("tap failed");
