@@ -130,12 +130,26 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         bridge?.webView.backgroundColor = .white
     }
 
-    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
+    private func liveHorizontalPlaneIds(in view: ARSCNView) -> Set<UUID> {
+        guard let anchors = view.session.currentFrame?.anchors else { return [] }
+        return Set(anchors.compactMap { ($0 as? ARPlaneAnchor)?.identifier })
+    }
+
+    private func firstLiveHit(from point: CGPoint, in view: ARSCNView) -> ARRaycastResult? {
         guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
-            return false
+            return nil
         }
         let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        let live = liveHorizontalPlaneIds(in: view)
+        if live.isEmpty { return results.first }
+        return results.first { result in
+            guard let id = result.anchor?.identifier else { return true }
+            return live.contains(id)
+        }
+    }
+
+    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
+        guard let result = firstLiveHit(from: point, in: view) else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -160,12 +174,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private func updateReticle(in view: ARSCNView, frame: ARFrame) {
         guard let reticle = reticleNode else { return }
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
-            reticle.isHidden = true
-            return
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else {
+        guard let result = firstLiveHit(from: center, in: view) else {
             reticle.isHidden = true
             return
         }

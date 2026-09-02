@@ -57,6 +57,7 @@ class CubeArPlugin : Plugin() {
     private var cubeSizeM = 0.12f
     private var cubeColorHex = "#30d158"
     private var placedCount = 0
+    private val placedAnchors = mutableListOf<AnchorNode>()
     private var reticleNode: CubeNode? = null
     private var surfaceFound = false
     private var pendingStartCall: PluginCall? = null
@@ -304,12 +305,13 @@ class CubeArPlugin : Plugin() {
                 light.lightDirection = sunDir
             }
 
-            sceneView.onSessionUpdated = { _, frame ->
+                sceneView.onSessionUpdated = { _, frame ->
                 if (!sessionFrameReceived) {
                     sessionFrameReceived = true
                     cancelSessionWatchdog()
                 }
                 val tracking = frame.camera.trackingState
+                migrateSubsumedAnchors(sceneView)
                 updateReticle(sceneView, frame)
                 when (tracking) {
                     TrackingState.TRACKING -> {
@@ -539,13 +541,12 @@ class CubeArPlugin : Plugin() {
 
     private fun updateReticle(sceneView: ARSceneView, frame: com.google.ar.core.Frame) {
         val reticle = reticleNode ?: return
-        val hits = frame.hitTest(
-            sceneView.width / 2f,
-            sceneView.height / 2f,
-        ).filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
+        val hits = pickLiveHorizontalHits(
+            frame.hitTest(
+                sceneView.width / 2f,
+                sceneView.height / 2f,
+            ),
+        )
 
         if (hits.isNotEmpty()) {
             val pose = hits[0].hitPose
@@ -569,16 +570,88 @@ class CubeArPlugin : Plugin() {
         if (frame == null) {
             return false
         }
-        val allHits = frame.hitTest(x, y)
-        val hits = allHits.filter { hit ->
-            val trackable = hit.trackable
-            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
-        }
+        val hits = pickLiveHorizontalHits(frame.hitTest(x, y))
         if (hits.isEmpty()) return false
 
         val hit = hits[0]
         placeCube(sceneView, hit)
         return true
+    }
+
+    /** Walk ARCore plane merges to the live parent. Dead children must not take taps. */
+    private fun survivingPlane(plane: Plane): Plane? {
+        var live = plane
+        var hops = 0
+        while (hops < 8) {
+            val parent = live.subsumedBy ?: break
+            live = parent
+            hops++
+        }
+        if (
+            live.subsumedBy != null ||
+            live.trackingState != TrackingState.TRACKING ||
+            live.type != Plane.Type.HORIZONTAL_UPWARD_FACING
+        ) {
+            return null
+        }
+        return live
+    }
+
+    /**
+     * Prefer in-polygon hits on a live plane. If ARCore only reports a
+     * subsumed child, keep that hit so createAnchor can transfer to the parent.
+     */
+    private fun pickLiveHorizontalHits(hits: List<HitResult>): List<HitResult> {
+        val inPolygon = mutableListOf<HitResult>()
+        val mergedRescue = mutableListOf<HitResult>()
+        for (hit in hits) {
+            val plane = hit.trackable as? Plane ?: continue
+            if (plane.type != Plane.Type.HORIZONTAL_UPWARD_FACING) continue
+            val live = survivingPlane(plane) ?: continue
+            if (live.isPoseInPolygon(hit.hitPose)) {
+                inPolygon.add(hit)
+            } else if (plane.subsumedBy != null) {
+                mergedRescue.add(hit)
+            }
+        }
+        return if (inPolygon.isNotEmpty()) inPolygon else mergedRescue
+    }
+
+    private fun migrateSubsumedAnchors(sceneView: ARSceneView) {
+        if (placedAnchors.isEmpty()) return
+        val next = ArrayList<AnchorNode>(placedAnchors.size)
+        for (node in placedAnchors) {
+            val cur = node.anchor
+            if (cur == null) {
+                next.add(node)
+                continue
+            }
+            val plane = cur.trackable as? Plane
+            val live = if (plane != null) survivingPlane(plane) else null
+            if (
+                live == null ||
+                cur.trackingState == TrackingState.TRACKING
+            ) {
+                next.add(node)
+                continue
+            }
+            try {
+                val replacement = live.createAnchor(cur.pose)
+                val children = node.childNodes.toList()
+                cur.detach()
+                node.parent = null
+                val migrated = AnchorNode(sceneView.engine, replacement)
+                for (child in children) {
+                    migrated.addChildNode(child)
+                }
+                sceneView.addChildNode(migrated)
+                next.add(migrated)
+            } catch (_: Exception) {
+                next.add(node)
+            }
+        }
+        placedAnchors.clear()
+        placedAnchors.addAll(next)
     }
 
     private fun placeCube(sceneView: ARSceneView, hit: HitResult) {
@@ -601,6 +674,7 @@ class CubeArPlugin : Plugin() {
         cube.position = io.github.sceneview.math.Position(0f, cubeSizeM / 2f, 0f)
         anchorNode.addChildNode(cube)
         sceneView.addChildNode(anchorNode)
+        placedAnchors.add(anchorNode)
         placedCount++
     }
 
@@ -636,6 +710,7 @@ class CubeArPlugin : Plugin() {
             materialLoader = null
             reticleNode = null
             surfaceFound = false
+            placedAnchors.clear()
         }
         arLifecycleOwner = null
 
