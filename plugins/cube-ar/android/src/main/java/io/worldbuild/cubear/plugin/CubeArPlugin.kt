@@ -58,6 +58,7 @@ class CubeArPlugin : Plugin() {
     private var cubeColorHex = "#30d158"
     private var placedCount = 0
     private var reticleNode: CubeNode? = null
+    private var ghostNode: CubeNode? = null
     private var surfaceFound = false
     private var pendingStartCall: PluginCall? = null
     private var sessionFrameReceived = false
@@ -535,6 +536,21 @@ class CubeArPlugin : Plugin() {
         ring.isVisible = false
         sceneView.addChildNode(ring)
         reticleNode = ring
+
+        val (r, g, b) = parseHexColor(cubeColorHex)
+        val ghost = CubeNode(
+            engine = sceneView.engine,
+            size = Size(cubeSizeM),
+            materialInstance = loader.createColorInstance(
+                SceneColor(r, g, b, 0.32f),
+                metallic = 0f,
+                roughness = 0.8f,
+                reflectance = 0.4f,
+            ),
+        )
+        ghost.isVisible = false
+        sceneView.addChildNode(ghost)
+        ghostNode = ghost
     }
 
     private fun updateReticle(sceneView: ARSceneView, frame: com.google.ar.core.Frame) {
@@ -555,12 +571,21 @@ class CubeArPlugin : Plugin() {
                 pose.ty(),
                 pose.tz(),
             )
+            ghostNode?.let { ghost ->
+                ghost.isVisible = true
+                ghost.position = io.github.sceneview.math.Position(
+                    pose.tx(),
+                    pose.ty() + cubeSizeM / 2f,
+                    pose.tz(),
+                )
+            }
             if (!surfaceFound) {
                 surfaceFound = true
                 notifyTracking("ready", "Tap to place a cube")
             }
         } else {
             reticle.isVisible = false
+            ghostNode?.isVisible = false
         }
     }
 
@@ -635,6 +660,7 @@ class CubeArPlugin : Plugin() {
             arSceneView = null
             materialLoader = null
             reticleNode = null
+            ghostNode = null
             surfaceFound = false
         }
         arLifecycleOwner = null

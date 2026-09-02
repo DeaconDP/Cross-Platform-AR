@@ -58,6 +58,15 @@ export async function startWebXR(
   reticle.visible = false;
   scene.add(reticle);
 
+  const ghost = createCube();
+  const ghostMat = ghost.material as THREE.MeshStandardMaterial;
+  ghostMat.transparent = true;
+  ghostMat.opacity = 0.32;
+  ghostMat.depthWrite = false;
+  ghost.matrixAutoUpdate = false;
+  ghost.visible = false;
+  scene.add(ghost);
+
   const reticlePos = new THREE.Vector3();
   const debug = new DebugCollector(overlay.debugPanel, snapshot);
   debug.setSessionMeta({
@@ -119,8 +128,10 @@ export async function startWebXR(
         const pose = hits[0].getPose(referenceSpace);
         if (pose) {
           reticle.visible = true;
+          ghost.visible = true;
           reticle.matrix.fromArray(pose.transform.matrix);
           reticle.matrix.decompose(reticlePos, reticle.quaternion, reticle.scale);
+          ghost.matrix.copy(reticle.matrix);
           if (!surfaceFound) {
             surfaceFound = true;
             debug.logEvent("surface found");
@@ -129,6 +140,7 @@ export async function startWebXR(
         }
       } else {
         reticle.visible = false;
+        ghost.visible = false;
       }
     }
 

@@ -20,6 +20,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var ghostNode: SCNNode?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -117,6 +118,19 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         node.isHidden = true
         view.scene.rootNode.addChildNode(node)
         reticleNode = node
+
+        let box = SCNBox(
+            width: CGFloat(cubeSizeM),
+            height: CGFloat(cubeSizeM),
+            length: CGFloat(cubeSizeM),
+            chamferRadius: 0,
+        )
+        box.firstMaterial?.diffuse.contents = UIColor.color(fromHex: cubeColorHex).withAlphaComponent(0.32)
+        box.firstMaterial?.lightingModel = .constant
+        let ghost = SCNNode(geometry: box)
+        ghost.isHidden = true
+        view.scene.rootNode.addChildNode(ghost)
+        ghostNode = ghost
     }
 
     private func detachArView() {
@@ -124,6 +138,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView?.removeFromSuperview()
         arView = nil
         reticleNode = nil
+        ghostNode = nil
         surfaceFound = false
 
         bridge?.webView.isOpaque = true
@@ -162,16 +177,23 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
         guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
             reticle.isHidden = true
+            ghostNode?.isHidden = true
             return
         }
         let results = view.session.raycast(query)
         guard let result = results.first else {
             reticle.isHidden = true
+            ghostNode?.isHidden = true
             return
         }
 
         reticle.simdTransform = result.worldTransform
         reticle.isHidden = false
+        if let ghost = ghostNode {
+            ghost.simdTransform = result.worldTransform
+            ghost.position.y += cubeSizeM / 2
+            ghost.isHidden = false
+        }
         if !surfaceFound {
             surfaceFound = true
             notifyTracking(state: "ready", message: "Tap to place a cube")
