@@ -1,6 +1,7 @@
 import ARKit
 import Capacitor
 import SceneKit
+import simd
 import UIKit
 
 @objc(CubeARPlugin)
@@ -131,11 +132,15 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
+        let transform: simd_float4x4
+        if let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal),
+           let result = view.session.raycast(query).first {
+            transform = result.worldTransform
+        } else if let analytic = analyticPlaneTransform(from: point, in: view) {
+            transform = analytic
+        } else {
             return false
         }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -148,7 +153,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         cube.firstMaterial?.metalness.contents = 0.15
 
         let node = SCNNode(geometry: cube)
-        node.simdTransform = result.worldTransform
+        node.simdTransform = transform
         node.position.y += cubeSizeM / 2
         node.eulerAngles.y = Float.random(in: 0...(2 * Float.pi))
 
@@ -160,22 +165,77 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private func updateReticle(in view: ARSCNView, frame: ARFrame) {
         guard let reticle = reticleNode else { return }
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
-            reticle.isHidden = true
-            return
+        let transform: simd_float4x4?
+        if let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) {
+            transform = view.session.raycast(query).first?.worldTransform
+                ?? analyticPlaneTransform(from: center, in: view)
+        } else {
+            transform = analyticPlaneTransform(from: center, in: view)
         }
-        let results = view.session.raycast(query)
-        guard let result = results.first else {
+        guard let transform else {
             reticle.isHidden = true
             return
         }
 
-        reticle.simdTransform = result.worldTransform
+        reticle.simdTransform = transform
         reticle.isHidden = false
         if !surfaceFound {
             surfaceFound = true
             notifyTracking(state: "ready", message: "Tap to place a cube")
         }
+    }
+
+    private func cameraRay(from point: CGPoint, in view: ARSCNView) -> (origin: SIMD3<Float>, dir: SIMD3<Float>)? {
+        let near = view.unprojectPoint(SCNVector3(point.x, point.y, 0))
+        let far = view.unprojectPoint(SCNVector3(point.x, point.y, 1))
+        let origin = SIMD3<Float>(near.x, near.y, near.z)
+        let dest = SIMD3<Float>(far.x, far.y, far.z)
+        let delta = dest - origin
+        let len = simd_length(delta)
+        guard len > 1e-6 else { return nil }
+        return (origin, delta / len)
+    }
+
+    private func analyticPlaneTransform(from point: CGPoint, in view: ARSCNView) -> simd_float4x4? {
+        guard let frame = view.session.currentFrame, let ray = cameraRay(from: point, in: view) else {
+            return nil
+        }
+        var best: simd_float4x4?
+        var bestRank = 99
+        var bestT = Float.greatestFiniteMagnitude
+        for anchor in frame.anchors.compactMap({ $0 as? ARPlaneAnchor }) where anchor.alignment == .horizontal {
+            let planePoint = SIMD3<Float>(
+                anchor.transform.columns.3.x,
+                anchor.transform.columns.3.y,
+                anchor.transform.columns.3.z
+            )
+            let normal = SIMD3<Float>(
+                anchor.transform.columns.1.x,
+                anchor.transform.columns.1.y,
+                anchor.transform.columns.1.z
+            )
+            let denom = simd_dot(normal, ray.dir)
+            if abs(denom) < 1e-5 { continue }
+            let t = simd_dot(planePoint - ray.origin, normal) / denom
+            if t < 0.12 || t > 8 { continue }
+            let hit = ray.origin + ray.dir * t
+            let local = anchor.transform.inverse * SIMD4<Float>(hit.x, hit.y, hit.z, 1)
+            let inExtents = abs(local.x) <= anchor.extent.x / 2 && abs(local.z) <= anchor.extent.z / 2
+            let centerDist = hypot(local.x, local.z)
+            let rank = inExtents ? 1 : 2
+            if rank == 2 {
+                if t < 0.2 || t > 6 { continue }
+                if centerDist > 2 { continue }
+            }
+            if rank < bestRank || (rank == bestRank && t < bestT) {
+                var tf = anchor.transform
+                tf.columns.3 = SIMD4<Float>(hit.x, hit.y, hit.z, 1)
+                best = tf
+                bestRank = rank
+                bestT = t
+            }
+        }
+        return best
     }
 
     private func notifyTracking(state: String, message: String? = nil) {
