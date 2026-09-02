@@ -23,4 +23,13 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
   }
+
+  async status() {
+    return {
+      tracking: "unavailable" as const,
+      planeCount: 0,
+      modelReady: false,
+      placed: false,
+    };
+  }
 }

@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { asTrackingState, coachForTracking } from "./ar-tracking";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -93,8 +94,11 @@ export async function startNativeAR(
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
-      overlay.hint.textContent = event.message;
+    if (placed === 0) {
+      overlay.hint.textContent =
+        event.message ??
+        coachForTracking(asTrackingState(event.state)) ??
+        overlay.hint.textContent;
     }
     if (debug.isEnabled()) {
       debug.tickNative({
@@ -150,6 +154,15 @@ export async function startNativeAR(
       cubeSizeM: CUBE_SIZE,
       colorHex: CUBE_COLOR_HEX,
     });
+    try {
+      const st = await CubeAR.status();
+      if (placed === 0) {
+        overlay.hint.textContent =
+          coachForTracking(asTrackingState(st.tracking)) ?? overlay.hint.textContent;
+      }
+    } catch {
+      /* older plugin without status() */
+    }
     document.body.classList.add("ar-native-active");
     overlay.root.hidden = false;
     await sessionEnded;

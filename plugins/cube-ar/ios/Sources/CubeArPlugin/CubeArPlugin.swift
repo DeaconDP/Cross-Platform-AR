@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "status", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -92,7 +93,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.delegate = self
         view.session.delegate = self
-        view.automaticallyUpdatesLighting = true
+        view.automaticallyUpdatesLighting = false
+        view.autoenablesDefaultLighting = false
+        installStableLights(on: view)
         view.antialiasingMode = .multisampling4X
 
         if let superview = webView.superview {
@@ -107,6 +110,60 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+    }
+
+    @objc func status(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                call.resolve([
+                    "tracking": "unavailable",
+                    "planeCount": 0,
+                    "modelReady": true,
+                    "placed": false,
+                ])
+                return
+            }
+            let tracking: String
+            if let camera = self.arView?.session.currentFrame?.camera {
+                switch camera.trackingState {
+                case .normal:
+                    tracking = self.surfaceFound ? "ready" : "initializing"
+                case .limited:
+                    tracking = "limited"
+                case .notAvailable:
+                    tracking = "unavailable"
+                @unknown default:
+                    tracking = "limited"
+                }
+            } else {
+                tracking = self.arView == nil ? "unavailable" : "initializing"
+            }
+            call.resolve([
+                "tracking": tracking,
+                "planeCount": self.surfaceFound ? 1 : 0,
+                "modelReady": true,
+                "placed": self.placedCount > 0,
+            ])
+        }
+    }
+
+    private func installStableLights(on view: ARSCNView) {
+        let ambient = SCNLight()
+        ambient.type = .ambient
+        ambient.intensity = 700
+        ambient.temperature = 6500
+        let ambientNode = SCNNode()
+        ambientNode.light = ambient
+        view.scene.rootNode.addChildNode(ambientNode)
+
+        let sun = SCNLight()
+        sun.type = .directional
+        sun.intensity = 900
+        sun.temperature = 6200
+        let sunNode = SCNNode()
+        sunNode.light = sun
+        sunNode.eulerAngles = SCNVector3(-Float.pi / 3, Float.pi / 5, 0)
+        view.scene.rootNode.addChildNode(sunNode)
     }
 
     private func addReticle(to view: ARSCNView) {
