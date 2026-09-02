@@ -1,6 +1,7 @@
 import ARKit
 import Capacitor
 import SceneKit
+import simd
 import UIKit
 
 @objc(CubeARPlugin)
@@ -26,6 +27,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve([
             "supported": supported,
             "backend": supported ? "arkit" : "none",
+            "plane": supported,
+            "image": false,
         ])
     }
 
@@ -130,12 +133,33 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         bridge?.webView.backgroundColor = .white
     }
 
-    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
-            return false
+    /// Geometry first (accurate), then estimated (fast first place). Reject behind-camera hits.
+    private func hitHorizontal(at point: CGPoint, in view: ARSCNView) -> ARRaycastResult? {
+        guard let frame = view.session.currentFrame else { return nil }
+        guard case .normal = frame.camera.trackingState else { return nil }
+        let allowings: [ARRaycastQuery.Target] = [.existingPlaneGeometry, .estimatedPlane]
+        for allowing in allowings {
+            guard let query = view.raycastQuery(from: point, allowing: allowing, alignment: .horizontal) else {
+                continue
+            }
+            for result in view.session.raycast(query) where isInFront(frame: frame, transform: result.worldTransform) {
+                return result
+            }
         }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        return nil
+    }
+
+    /// Camera looks along local −Z; reject hits behind the phone.
+    private func isInFront(frame: ARFrame, transform: simd_float4x4) -> Bool {
+        let cam = frame.camera.transform
+        let camPos = simd_make_float3(cam.columns.3)
+        let hitPos = simd_make_float3(transform.columns.3)
+        let forward = -simd_make_float3(cam.columns.2)
+        return simd_dot(forward, hitPos - camPos) > 0.02
+    }
+
+    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
+        guard let result = hitHorizontal(at: point, in: view) else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -160,12 +184,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private func updateReticle(in view: ARSCNView, frame: ARFrame) {
         guard let reticle = reticleNode else { return }
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
-            reticle.isHidden = true
-            return
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else {
+        guard let result = hitHorizontal(at: center, in: view) else {
             reticle.isHidden = true
             return
         }
