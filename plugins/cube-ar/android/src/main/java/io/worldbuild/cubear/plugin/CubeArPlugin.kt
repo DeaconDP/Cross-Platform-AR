@@ -39,6 +39,7 @@ import io.github.sceneview.ar.node.AnchorNode
 import io.github.sceneview.loaders.MaterialLoader
 import io.github.sceneview.math.Color as SceneColor
 import io.github.sceneview.math.Direction
+import io.github.sceneview.math.Rotation
 import io.github.sceneview.math.Size
 import io.github.sceneview.node.CubeNode
 import kotlin.math.max
@@ -58,6 +59,7 @@ class CubeArPlugin : Plugin() {
     private var cubeColorHex = "#30d158"
     private var placedCount = 0
     private var reticleNode: CubeNode? = null
+    private var lastCube: CubeNode? = null
     private var surfaceFound = false
     private var pendingStartCall: PluginCall? = null
     private var sessionFrameReceived = false
@@ -218,6 +220,23 @@ class CubeArPlugin : Plugin() {
             result.put("placed", placed)
             result.put("count", placedCount)
             call.resolve(result)
+        }
+    }
+
+    @PluginMethod
+    fun rotateLast(call: PluginCall) {
+        val radians = call.getFloat("radians") ?: 0f
+        bridge.executeOnMainThread {
+            val cube = lastCube
+            if (cube != null) {
+                val degrees = Math.toDegrees(radians.toDouble()).toFloat()
+                cube.rotation = Rotation(
+                    cube.rotation.x,
+                    cube.rotation.y + degrees,
+                    cube.rotation.z,
+                )
+            }
+            call.resolve()
         }
     }
 
@@ -601,6 +620,7 @@ class CubeArPlugin : Plugin() {
         cube.position = io.github.sceneview.math.Position(0f, cubeSizeM / 2f, 0f)
         anchorNode.addChildNode(cube)
         sceneView.addChildNode(anchorNode)
+        lastCube = cube
         placedCount++
     }
 
@@ -635,6 +655,7 @@ class CubeArPlugin : Plugin() {
             arSceneView = null
             materialLoader = null
             reticleNode = null
+            lastCube = null
             surfaceFound = false
         }
         arLifecycleOwner = null

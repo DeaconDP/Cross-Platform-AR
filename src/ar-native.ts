@@ -90,6 +90,9 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const fingers = new Map<number, { x: number; y: number; startX: number; startY: number }>();
+  let lastTwist = 0;
+  let twisted = false;
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -110,16 +113,60 @@ export async function startNativeAR(
     void CubeAR.addListener("sessionEnded", () => resolve());
   });
 
-  const onTap = async (event: PointerEvent) => {
+  const ignoreTarget = (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
-    if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    return Boolean(target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail"));
+  };
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (ignoreTarget(event)) return;
+    fingers.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+      startX: event.clientX,
+      startY: event.clientY,
+    });
+    if (fingers.size === 2) {
+      const pts = [...fingers.values()];
+      lastTwist = Math.atan2(pts[1]!.y - pts[0]!.y, pts[1]!.x - pts[0]!.x);
+      twisted = false;
+    }
+  };
+
+  const onPointerMove = (event: PointerEvent) => {
+    const rec = fingers.get(event.pointerId);
+    if (!rec) return;
+    rec.x = event.clientX;
+    rec.y = event.clientY;
+    if (fingers.size < 2 || placed === 0) return;
+    const pts = [...fingers.values()];
+    const ang = Math.atan2(pts[1]!.y - pts[0]!.y, pts[1]!.x - pts[0]!.x);
+    let d = ang - lastTwist;
+    if (d > Math.PI) d -= Math.PI * 2;
+    if (d < -Math.PI) d += Math.PI * 2;
+    lastTwist = ang;
+    if (Math.abs(d) < 0.002) return;
+    twisted = true;
+    void CubeAR.rotateLast({ radians: d });
+  };
+
+  const onPointerUp = async (event: PointerEvent) => {
+    const rec = fingers.get(event.pointerId);
+    fingers.delete(event.pointerId);
+    if (fingers.size < 2) lastTwist = 0;
+    if (!rec || ignoreTarget(event) || twisted || fingers.size > 0) {
+      if (fingers.size === 0) twisted = false;
+      return;
+    }
+    const travel = Math.hypot(rec.x - rec.startX, rec.y - rec.startY);
+    if (travel > 14) return;
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
     try {
       const result = await CubeAR.onScreenTap({
-        x: event.clientX * dpr,
-        y: event.clientY * dpr,
+        x: rec.x * dpr,
+        y: rec.y * dpr,
       });
       if (result.placed) {
         placed = result.count;
@@ -132,7 +179,10 @@ export async function startNativeAR(
     }
   };
 
-  document.addEventListener("pointerdown", onTap);
+  document.addEventListener("pointerdown", onPointerDown);
+  document.addEventListener("pointermove", onPointerMove);
+  document.addEventListener("pointerup", onPointerUp);
+  document.addEventListener("pointercancel", onPointerUp);
 
   const onExit = async () => {
     overlay.exit.disabled = true;
@@ -154,7 +204,10 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
-    document.removeEventListener("pointerdown", onTap);
+    document.removeEventListener("pointerdown", onPointerDown);
+    document.removeEventListener("pointermove", onPointerMove);
+    document.removeEventListener("pointerup", onPointerUp);
+    document.removeEventListener("pointercancel", onPointerUp);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();

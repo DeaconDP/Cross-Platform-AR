@@ -137,6 +137,17 @@ async function init(): Promise<void> {
             await startNativeAR(overlay, snapshot);
             setStatus("Native AR session ended \u2014 pick another path anytime.");
           } catch (err) {
+            if (webxrSupported) {
+              setStatus("Native AR didn’t start — trying WebXR…");
+              overlay.root.hidden = false;
+              try {
+                await startWebXR(overlay, snapshot);
+                setStatus("WebXR session ended \u2014 pick another path anytime.");
+                return;
+              } catch {
+                /* keep native error below */
+              }
+            }
             setStatus(nativeARErrorMessage(err), true);
           } finally {
             overlay.root.hidden = true;
