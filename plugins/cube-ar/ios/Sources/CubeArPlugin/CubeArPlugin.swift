@@ -130,12 +130,42 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         bridge?.webView.backgroundColor = .white
     }
 
-    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
-            return false
+    /// Geometry → comfort infinite → comfort estimated.
+    private static let hitMinM: Float = 0.25
+    private static let hitMaxM: Float = 2.5
+
+    private func hitHorizontal(at point: CGPoint, in view: ARSCNView) -> ARRaycastResult? {
+        let cam = view.session.currentFrame?.camera
+        if let query = view.raycastQuery(from: point, allowing: .existingPlaneGeometry, alignment: .horizontal),
+           let hit = view.session.raycast(query).first {
+            return hit
         }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        if let query = view.raycastQuery(from: point, allowing: .existingPlaneInfinite, alignment: .horizontal),
+           let hit = view.session.raycast(query).first,
+           Self.inComfortRange(hit, camera: cam) {
+            return hit
+        }
+        if let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal),
+           let hit = view.session.raycast(query).first,
+           Self.inComfortRange(hit, camera: cam) {
+            return hit
+        }
+        return nil
+    }
+
+    private static func inComfortRange(_ hit: ARRaycastResult, camera: ARCamera?) -> Bool {
+        guard let camera else { return true }
+        let c = camera.transform.columns.3
+        let h = hit.worldTransform.columns.3
+        let dx = h.x - c.x
+        let dy = h.y - c.y
+        let dz = h.z - c.z
+        let d = sqrtf(dx * dx + dy * dy + dz * dz)
+        return d >= hitMinM && d <= hitMaxM
+    }
+
+    private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
+        guard let result = hitHorizontal(at: point, in: view) else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -157,15 +187,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         return true
     }
 
-    private func updateReticle(in view: ARSCNView, frame: ARFrame) {
+    private func updateReticle(in view: ARSCNView, frame _: ARFrame) {
         guard let reticle = reticleNode else { return }
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
-            reticle.isHidden = true
-            return
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else {
+        guard let result = hitHorizontal(at: center, in: view) else {
             reticle.isHidden = true
             return
         }
