@@ -20,6 +20,14 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
     // no-op
   }
 
+  async pauseSession(): Promise<void> {
+    // no-op
+  }
+
+  async resumeSession(): Promise<void> {
+    // no-op
+  }
+
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
   }

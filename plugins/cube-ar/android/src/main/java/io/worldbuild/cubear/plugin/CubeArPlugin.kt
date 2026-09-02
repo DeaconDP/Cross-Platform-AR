@@ -67,6 +67,7 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var userPaused = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -193,6 +194,40 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun pauseSession(call: PluginCall) {
+        bridge.executeOnMainThread {
+            userPaused = true
+            val registry = arLifecycleOwner?.registry
+            if (registry != null && registry.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                try {
+                    registry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+                } catch (_: Exception) {
+                    // ignore
+                }
+            }
+            call.resolve()
+        }
+    }
+
+    @PluginMethod
+    fun resumeSession(call: PluginCall) {
+        bridge.executeOnMainThread {
+            userPaused = false
+            val registry = arLifecycleOwner?.registry
+            if (registry != null && registry.currentState.isAtLeast(Lifecycle.State.STARTED) &&
+                !registry.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            ) {
+                try {
+                    registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+                } catch (ex: Exception) {
+                    Logger.error("CubeAR idle resume failed", ex)
+                }
+            }
+            call.resolve()
+        }
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")
@@ -205,7 +240,7 @@ class CubeArPlugin : Plugin() {
 
         bridge.executeOnMainThread {
             val view = arSceneView
-            if (view == null) {
+            if (view == null || userPaused) {
                 val result = JSObject()
                 result.put("placed", false)
                 result.put("count", placedCount)
@@ -638,6 +673,7 @@ class CubeArPlugin : Plugin() {
             surfaceFound = false
         }
         arLifecycleOwner = null
+        userPaused = false
 
         val webView = bridge.webView
         webView.setBackgroundColor(Color.WHITE)
@@ -681,6 +717,7 @@ class CubeArPlugin : Plugin() {
     override fun handleOnResume() {
         super.handleOnResume()
         pendingStartCall?.let { ensureArCoreAndBeginSession(it) }
+        if (userPaused) return
         val view = arSceneView ?: return
         val registry = arLifecycleOwner?.registry
         if (registry != null && registry.currentState.isAtLeast(Lifecycle.State.STARTED) &&

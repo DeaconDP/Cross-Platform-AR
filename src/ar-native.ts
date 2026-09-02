@@ -7,6 +7,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { createArIdleSteward } from "./idleSteward";
 import type { OverlayElements } from "./ar-webxr";
 
 /** Map native plugin rejection messages to actionable user guidance. */
@@ -87,9 +88,18 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  let idlePaused = false;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const steward = createArIdleSteward({
+    onIdle: () => {
+      idlePaused = true;
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = "Camera paused — tap to resume";
+      void CubeAR.pauseSession().catch(() => undefined);
+    },
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -113,6 +123,16 @@ export async function startNativeAR(
   const onTap = async (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+
+    if (idlePaused) {
+      idlePaused = false;
+      overlay.hint.textContent = placed === 0 ? "Move your phone to find a surface" : overlay.hint.textContent;
+      overlay.hint.hidden = placed > 0;
+      await CubeAR.resumeSession().catch(() => undefined);
+      steward.noteActivity();
+      return;
+    }
+    steward.noteActivity();
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
@@ -154,6 +174,7 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    steward.dispose();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
