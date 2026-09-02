@@ -8,6 +8,10 @@ Tap-to-place cube on Android (WebXR) and iOS (AR Quick Look), inline preview els
 
 Landing screen lists every available AR route with labels (Native ARKit/ARCore, WebXR, Quick Look, Chrome handoff). Local `cube-ar` Capacitor plugin for in-app native tap-to-place on iOS and Android.
 
+## v0.2.1 — Faster first tap (2026-09-02)
+
+Once any table exists, place against its grown extents or a comfort-clamped infinite plane (0.25–2.5 m). Geometry still wins when the mesh is under the finger. WebXR reticle uses the same comfort range.
+
 ## Ideas / later
 
 - Deploy to a public HTTPS host so phones don't need the LAN + self-signed cert dance (also unblocks Cap Android `VITE_AR_ORIGIN` without LAN certs)
