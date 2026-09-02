@@ -67,6 +67,8 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var lastTrackingState: String? = null
+    private var lastTrackingMessage: String? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -637,6 +639,8 @@ class CubeArPlugin : Plugin() {
             reticleNode = null
             surfaceFound = false
         }
+        lastTrackingState = null
+        lastTrackingMessage = null
         arLifecycleOwner = null
 
         val webView = bridge.webView
@@ -654,6 +658,9 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun notifyTracking(state: String, message: String? = null) {
+        if (state == lastTrackingState && message == lastTrackingMessage) return
+        lastTrackingState = state
+        lastTrackingMessage = message
         val payload = JSObject()
         payload.put("state", state)
         if (message != null) payload.put("message", message)

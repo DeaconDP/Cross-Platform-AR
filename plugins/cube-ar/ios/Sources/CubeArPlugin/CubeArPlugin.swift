@@ -20,6 +20,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var pendingCubeNodes: [SCNNode] = []
+    private var savedIdleTimerDisabled = false
+    private static let cubeAnchorName = "cube-place"
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -107,6 +110,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        savedIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -124,18 +129,16 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView?.removeFromSuperview()
         arView = nil
         reticleNode = nil
+        pendingCubeNodes.removeAll()
         surfaceFound = false
+        UIApplication.shared.isIdleTimerDisabled = savedIdleTimerDisabled
 
         bridge?.webView.isOpaque = true
         bridge?.webView.backgroundColor = .white
     }
 
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
-        guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
-            return false
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else { return false }
+        guard let result = bestHorizontalHit(in: view, at: point) else { return false }
 
         let cube = SCNBox(
             width: CGFloat(cubeSizeM),
@@ -147,25 +150,37 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         cube.firstMaterial?.roughness.contents = 0.35
         cube.firstMaterial?.metalness.contents = 0.15
 
-        let node = SCNNode(geometry: cube)
-        node.simdTransform = result.worldTransform
-        node.position.y += cubeSizeM / 2
-        node.eulerAngles.y = Float.random(in: 0...(2 * Float.pi))
+        let content = SCNNode(geometry: cube)
+        content.position.y += cubeSizeM / 2
+        content.eulerAngles.y = Float.random(in: 0...(2 * Float.pi))
 
-        view.scene.rootNode.addChildNode(node)
+        let wrapper = SCNNode()
+        wrapper.addChildNode(content)
+        wrapper.simdWorldTransform = result.worldTransform
+        view.scene.rootNode.addChildNode(wrapper)
+        pendingCubeNodes.append(wrapper)
+
+        let anchor = ARAnchor(name: Self.cubeAnchorName, transform: result.worldTransform)
+        view.session.add(anchor: anchor)
         placedCount += 1
         return true
     }
 
-    private func updateReticle(in view: ARSCNView, frame: ARFrame) {
+    private func bestHorizontalHit(in view: ARSCNView, at point: CGPoint) -> ARRaycastResult? {
+        if let query = view.raycastQuery(from: point, allowing: .existingPlaneGeometry, alignment: .horizontal),
+           let hit = view.session.raycast(query).first {
+            return hit
+        }
+        if let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) {
+            return view.session.raycast(query).first
+        }
+        return nil
+    }
+
+    private func updateReticle(in view: ARSCNView) {
         guard let reticle = reticleNode else { return }
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        guard let query = view.raycastQuery(from: center, allowing: .estimatedPlane, alignment: .horizontal) else {
-            reticle.isHidden = true
-            return
-        }
-        let results = view.session.raycast(query)
-        guard let result = results.first else {
+        guard let result = bestHorizontalHit(in: view, at: center) else {
             reticle.isHidden = true
             return
         }
@@ -188,11 +203,17 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 }
 
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
+    public func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
+        guard anchor.name == Self.cubeAnchorName, !pendingCubeNodes.isEmpty else { return }
+        let wrapper = pendingCubeNodes.removeFirst()
+        wrapper.removeFromParentNode()
+        wrapper.simdTransform = matrix_identity_float4x4
+        node.addChildNode(wrapper)
+    }
+
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
-        guard let view = arView, let frame = view.session.currentFrame else { return }
-        DispatchQueue.main.async { [weak self] in
-            self?.updateReticle(in: view, frame: frame)
-        }
+        guard let view = arView, view.session.currentFrame != nil else { return }
+        updateReticle(in: view)
     }
 
     public func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
