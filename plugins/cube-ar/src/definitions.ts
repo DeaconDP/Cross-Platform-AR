@@ -40,5 +40,9 @@ export interface CubeARPlugin {
     eventName: "sessionEnded",
     listenerFunc: () => void,
   ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "trackingReset",
+    listenerFunc: (event: { reason?: string }) => void,
+  ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

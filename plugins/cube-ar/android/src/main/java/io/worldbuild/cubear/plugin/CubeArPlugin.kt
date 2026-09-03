@@ -9,6 +9,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +68,8 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private val placedNodes = mutableListOf<AnchorNode>()
+    private var pausedAtElapsed = 0L
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -78,6 +81,7 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+        private const val STALE_PAUSE_MS = 20_000L
     }
 
     @PluginMethod
@@ -601,7 +605,40 @@ class CubeArPlugin : Plugin() {
         cube.position = io.github.sceneview.math.Position(0f, cubeSizeM / 2f, 0f)
         anchorNode.addChildNode(cube)
         sceneView.addChildNode(anchorNode)
+        placedNodes.add(anchorNode)
         placedCount++
+    }
+
+    private fun clearPlacedCubes() {
+        for (node in placedNodes.toList()) {
+            try {
+                node.anchor?.detach()
+            } catch (_: Exception) {
+                // already detached
+            }
+            try {
+                node.destroy()
+            } catch (_: Exception) {
+                // node already gone
+            }
+        }
+        placedNodes.clear()
+        placedCount = 0
+        surfaceFound = false
+    }
+
+    private fun resetWorldTracking() {
+        val view = arSceneView ?: return
+        clearPlacedCubes()
+        val payload = JSObject()
+        payload.put("reason", "stale")
+        notifyListeners("trackingReset", payload)
+        notifyTracking("initializing", "Move your phone to find a surface")
+        try {
+            view.arCore.resume(activity, null)
+        } catch (ex: Exception) {
+            Logger.error("CubeAR stale resume failed", ex)
+        }
     }
 
     private fun scheduleSessionWatchdog() {
@@ -636,6 +673,7 @@ class CubeArPlugin : Plugin() {
             materialLoader = null
             reticleNode = null
             surfaceFound = false
+            placedNodes.clear()
         }
         arLifecycleOwner = null
 
@@ -666,6 +704,9 @@ class CubeArPlugin : Plugin() {
 
     override fun handleOnPause() {
         super.handleOnPause()
+        if (arSceneView != null) {
+            pausedAtElapsed = SystemClock.elapsedRealtime()
+        }
         val registry = arLifecycleOwner?.registry
         if (registry != null && registry.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             try {
@@ -682,6 +723,16 @@ class CubeArPlugin : Plugin() {
         super.handleOnResume()
         pendingStartCall?.let { ensureArCoreAndBeginSession(it) }
         val view = arSceneView ?: return
+        val pausedFor = if (pausedAtElapsed > 0) {
+            SystemClock.elapsedRealtime() - pausedAtElapsed
+        } else {
+            0L
+        }
+        pausedAtElapsed = 0L
+        if (pausedFor >= STALE_PAUSE_MS) {
+            resetWorldTracking()
+            return
+        }
         val registry = arLifecycleOwner?.registry
         if (registry != null && registry.currentState.isAtLeast(Lifecycle.State.STARTED) &&
             !registry.currentState.isAtLeast(Lifecycle.State.RESUMED)

@@ -20,6 +20,11 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var cubeNodes: [SCNNode] = []
+    private var pausedAt: Date?
+    private var hostPauseObs: NSObjectProtocol?
+    private var hostResumeObs: NSObjectProtocol?
+    private static let stalePause: TimeInterval = 20
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -107,6 +112,70 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        watchHostLifecycle()
+    }
+
+    private func watchHostLifecycle() {
+        unwatchHostLifecycle()
+        let nc = NotificationCenter.default
+        hostPauseObs = nc.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.noteHostPaused()
+        }
+        hostResumeObs = nc.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.noteHostResumed()
+        }
+    }
+
+    private func unwatchHostLifecycle() {
+        if let hostPauseObs { NotificationCenter.default.removeObserver(hostPauseObs) }
+        if let hostResumeObs { NotificationCenter.default.removeObserver(hostResumeObs) }
+        hostPauseObs = nil
+        hostResumeObs = nil
+    }
+
+    private func noteHostPaused() {
+        guard arView != nil else { return }
+        pausedAt = Date()
+        arView?.session.pause()
+    }
+
+    private func noteHostResumed() {
+        guard let arView else { return }
+        let stale = pausedAt.map { Date().timeIntervalSince($0) >= Self.stalePause } ?? false
+        pausedAt = nil
+        if stale {
+            resetWorldTracking()
+            return
+        }
+        let config = ARWorldTrackingConfiguration()
+        config.planeDetection = [.horizontal]
+        arView.session.run(config)
+    }
+
+    private func resetWorldTracking() {
+        clearCubes()
+        notifyListeners("trackingReset", data: ["reason": "stale"])
+        notifyTracking(state: "initializing", message: "Move your phone to find a surface")
+        guard let arView else { return }
+        let config = ARWorldTrackingConfiguration()
+        config.planeDetection = [.horizontal]
+        arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+    }
+
+    private func clearCubes() {
+        cubeNodes.forEach { $0.removeFromParentNode() }
+        cubeNodes.removeAll()
+        placedCount = 0
+        surfaceFound = false
+        reticleNode?.isHidden = true
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +189,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        unwatchHostLifecycle()
+        pausedAt = nil
+        clearCubes()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
@@ -153,6 +225,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         node.eulerAngles.y = Float.random(in: 0...(2 * Float.pi))
 
         view.scene.rootNode.addChildNode(node)
+        cubeNodes.append(node)
         placedCount += 1
         return true
     }
