@@ -7,6 +7,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arViewPx } from "./ar-gesture-flush";
 import type { OverlayElements } from "./ar-webxr";
 
 /** Map native plugin rejection messages to actionable user guidance. */
@@ -114,12 +115,13 @@ export async function startNativeAR(
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
-    // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
+    // ARCore hit-test expects view pixels relative to the overlay, not the window.
     const dpr = window.devicePixelRatio || 1;
+    const px = arViewPx(event.clientX, event.clientY, overlay.root.getBoundingClientRect(), dpr);
     try {
       const result = await CubeAR.onScreenTap({
-        x: event.clientX * dpr,
-        y: event.clientY * dpr,
+        x: px.x,
+        y: px.y,
       });
       if (result.placed) {
         placed = result.count;
