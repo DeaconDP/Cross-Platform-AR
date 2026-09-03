@@ -154,15 +154,23 @@ class CubeArPlugin : Plugin() {
                     onFailed = { ex ->
                         Logger.error("CubeAR attach failed", ex)
                         detachArView()
-                        call.reject("Failed to start native AR: ${formatError(ex)}")
+                        call.reject(startFailureMessage(ex))
                     },
                 )
             } catch (ex: Exception) {
                 Logger.error("CubeAR attach failed", ex)
                 detachArView()
-                call.reject("Failed to start native AR: ${formatError(ex)}")
+                call.reject(startFailureMessage(ex))
             }
         }
+    }
+
+    private fun startFailureMessage(ex: Throwable): String {
+        val blob = "${ex.message} ${ex.cause?.message}".lowercase()
+        if (blob.contains("in_use") || blob.contains("in use") || blob.contains("camera_disabled")) {
+            return "The camera is busy in another app. Close it, then try again."
+        }
+        return "Failed to start native AR: ${formatError(ex)}"
     }
 
     private fun formatError(ex: Throwable): String {
