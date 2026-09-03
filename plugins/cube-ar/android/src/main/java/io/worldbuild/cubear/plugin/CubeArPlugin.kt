@@ -102,6 +102,7 @@ class CubeArPlugin : Plugin() {
         if (getPermissionState("camera") == PermissionState.GRANTED) {
             ensureArCoreAndBeginSession(call)
         } else {
+            emitStartPhase("permission")
             requestPermissionForAlias("camera", call, "cameraPermissionCallback")
         }
     }
@@ -124,6 +125,7 @@ class CubeArPlugin : Plugin() {
         try {
             when (ArCoreApk.getInstance().requestInstall(activity, true)) {
                 ArCoreApk.InstallStatus.INSTALL_REQUESTED -> {
+                    emitStartPhase("installing")
                     pendingStartCall = call
                 }
                 ArCoreApk.InstallStatus.INSTALLED -> {
@@ -148,6 +150,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        emitStartPhase("camera")
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -658,6 +661,12 @@ class CubeArPlugin : Plugin() {
         payload.put("state", state)
         if (message != null) payload.put("message", message)
         notifyListeners("trackingChanged", payload)
+    }
+
+    private fun emitStartPhase(phase: String) {
+        val payload = JSObject()
+        payload.put("phase", phase)
+        notifyListeners("startPhase", payload)
     }
 
     private fun notifySessionEnded() {
