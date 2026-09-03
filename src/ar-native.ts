@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { bindArPageLife } from "./ar-page-life";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -143,6 +144,9 @@ export async function startNativeAR(
     }
   };
   overlay.exit.addEventListener("click", onExit);
+  const unbindPageLife = bindArPageLife(() => {
+    void CubeAR.stopSession().catch(() => undefined);
+  });
 
   try {
     stopPreview();
@@ -154,6 +158,7 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    unbindPageLife();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
