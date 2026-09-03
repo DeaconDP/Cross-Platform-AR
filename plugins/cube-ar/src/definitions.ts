@@ -40,5 +40,13 @@ export interface CubeARPlugin {
     eventName: "sessionEnded",
     listenerFunc: () => void,
   ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "surfaceWait",
+    listenerFunc: (event: { level?: string; waitedMs?: number }) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "idleClosed",
+    listenerFunc: (event: { reason?: string; message?: string }) => void,
+  ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

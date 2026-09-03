@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arArmIdle } from "./ar-idle";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -76,7 +77,23 @@ export async function startWebXR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const idle = arArmIdle({
+    getState: () => ({ placed: placed > 0, planeFound: false }),
+    onCoach: (copy) => {
+      if (copy) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = copy;
+      }
+    },
+    onExit: (_reason, copy) => {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = copy;
+      void session.end();
+    },
+  });
+
   session.addEventListener("select", () => {
+    idle.noteInteract();
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
@@ -123,6 +140,7 @@ export async function startWebXR(
           reticle.matrix.decompose(reticlePos, reticle.quaternion, reticle.scale);
           if (!surfaceFound) {
             surfaceFound = true;
+            idle.notePlane();
             debug.logEvent("surface found");
             if (placed === 0) overlay.hint.textContent = "Tap to place a cube";
           }
@@ -156,6 +174,7 @@ export async function startWebXR(
     session.addEventListener("end", () => resolve(), { once: true });
   });
 
+  idle.dispose();
   overlay.exit.removeEventListener("click", onExit);
   unwireDebug();
   unbindSession();

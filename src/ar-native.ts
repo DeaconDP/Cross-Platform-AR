@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arArmIdle } from "./ar-idle";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -91,8 +92,30 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const idle = arArmIdle({
+    getState: () => ({ placed: placed > 0, planeFound: placed > 0 }),
+    onCoach: (copy) => {
+      if (copy) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = copy;
+      }
+    },
+    onExit: (_reason, copy) => {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = copy;
+      void CubeAR.stopSession();
+    },
+  });
+
+  const idleClosed = await CubeAR.addListener("idleClosed", (event) => {
+    overlay.hint.hidden = false;
+    overlay.hint.textContent =
+      event.message || "AR closed after a pause — open it again when you’re ready.";
+  });
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
+    if (event.state === "ready") idle.notePlane();
     if (event.message && placed === 0) {
       overlay.hint.textContent = event.message;
     }
@@ -113,6 +136,7 @@ export async function startNativeAR(
   const onTap = async (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    idle.noteInteract();
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
@@ -122,6 +146,7 @@ export async function startNativeAR(
         y: event.clientY * dpr,
       });
       if (result.placed) {
+        idle.notePlane();
         placed = result.count;
         overlay.count.textContent = String(placed);
         overlay.hint.hidden = true;
@@ -154,9 +179,11 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    idle.dispose();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    idleClosed.remove();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
