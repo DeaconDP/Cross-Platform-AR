@@ -7,6 +7,7 @@ export interface CubeARSupportResult {
 export interface CubeARSessionOptions {
     cubeSizeM: number;
     colorHex: string;
+    sessionId?: string;
 }
 export interface CubeARTapOptions {
     x: number;
@@ -19,6 +20,7 @@ export interface CubeARTapResult {
 export interface CubeARTrackingEvent {
     state: "initializing" | "ready" | "limited" | "unavailable";
     message?: string;
+    sessionId?: string;
 }
 export interface CubeARPlugin {
     isSupported(): Promise<CubeARSupportResult>;
