@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "test": "node --experimental-strip-types --test src/ar-ready.test.ts",
     "dev": "vite",
     "build": "npm run build --prefix plugins/cube-ar && tsc && vite build",
     "preview": "vite preview",
