@@ -1,6 +1,7 @@
 package io.worldbuild.cubear.plugin
 
 import android.Manifest
+import android.content.res.Configuration
 import android.content.Context
 import android.graphics.Color
 import android.hardware.Sensor
@@ -67,6 +68,8 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var lastViewW = 0
+    private var lastViewH = 0
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -190,6 +193,25 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun syncLayout(call: PluginCall) {
+        call.resolve()
+        emitLayoutIfChanged()
+    }
+
+    private fun emitLayoutIfChanged() {
+        val view = arSceneView ?: return
+        val w = view.width
+        val h = view.height
+        if (w == lastViewW && h == lastViewH) return
+        lastViewW = w
+        lastViewH = h
+        val ev = JSObject()
+        ev.put("w", w)
+        ev.put("h", h)
+        notifyListeners("layoutChanged", ev)
     }
 
     @PluginMethod
@@ -638,6 +660,8 @@ class CubeArPlugin : Plugin() {
             surfaceFound = false
         }
         arLifecycleOwner = null
+        lastViewW = 0
+        lastViewH = 0
 
         val webView = bridge.webView
         webView.setBackgroundColor(Color.WHITE)
@@ -698,6 +722,11 @@ class CubeArPlugin : Plugin() {
                 Logger.error("CubeAR resume failed", ex)
             }
         }
+    }
+
+    override fun handleOnConfigurationChanged(newConfig: Configuration) {
+        super.handleOnConfigurationChanged(newConfig)
+        emitLayoutIfChanged()
     }
 
     override fun handleOnDestroy() {

@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arArmLayout, arMeasureHost } from "./ar-layout";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -110,9 +111,31 @@ export async function startNativeAR(
     void CubeAR.addListener("sessionEnded", () => resolve());
   });
 
+  let layoutUsable = true;
+  const layoutArm = arArmLayout({
+    measure: () => arMeasureHost(overlay.root),
+    onChange: (verdict) => {
+      layoutUsable = verdict.usable;
+      if (verdict.coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = verdict.coach;
+      }
+      void CubeAR.syncLayout(verdict.native).catch(() => undefined);
+    },
+  });
+  const layoutListen = CubeAR.addListener("layoutChanged", () => {
+    layoutArm.note();
+  }).catch(() => null);
+
   const onTap = async (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    if (!layoutUsable) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent =
+        "AR needs a larger view. Rotate the phone or leave split screen.";
+      return;
+    }
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
@@ -157,6 +180,9 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    layoutArm.dispose();
+    const layoutHandle = await layoutListen;
+    layoutHandle?.remove();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
