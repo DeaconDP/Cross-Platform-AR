@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { arParsePowerState, arResolvePower } from "./ar-power";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -146,9 +147,20 @@ export async function startNativeAR(
 
   try {
     stopPreview();
+    let nativePower = null;
+    try {
+      nativePower = arParsePowerState(await CubeAR.powerState());
+    } catch {
+      nativePower = null;
+    }
+    const profile = await arResolvePower(nativePower);
+    if (profile.coach && placed === 0) {
+      overlay.hint.textContent = profile.coach;
+    }
     await CubeAR.startSession({
       cubeSizeM: CUBE_SIZE,
       colorHex: CUBE_COLOR_HEX,
+      lowFx: !profile.enableFx,
     });
     document.body.classList.add("ar-native-active");
     overlay.root.hidden = false;

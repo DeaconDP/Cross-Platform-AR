@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { arApplyPixelRatio, arLastPower } from "./ar-power";
 
 /** Edge length of the demo cube in meters (real-world scale in AR). */
 export const CUBE_SIZE = 0.12;
@@ -49,8 +50,14 @@ export function stopPreview(): void {
 
 export function startPreview(container: HTMLElement): void {
   stopPreview();
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const power = arLastPower();
+  const renderer = new THREE.WebGLRenderer({
+    antialias: power.antialias,
+    alpha: true,
+  });
+  renderer.setPixelRatio(
+    arApplyPixelRatio(window.devicePixelRatio, power.pixelRatioCap),
+  );
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.appendChild(renderer.domElement);
 

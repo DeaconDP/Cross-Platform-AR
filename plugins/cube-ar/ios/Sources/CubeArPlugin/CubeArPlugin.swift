@@ -9,6 +9,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "CubeAR"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "isSupported", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "powerState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
@@ -20,6 +21,66 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var powerObservers = false
+
+    public override func load() {
+        super.load()
+        guard !powerObservers else { return }
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onPowerChanged),
+            name: .NSProcessInfoPowerStateDidChange,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onPowerChanged),
+            name: UIDevice.batteryLevelDidChangeNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onPowerChanged),
+            name: UIDevice.batteryStateDidChangeNotification,
+            object: nil
+        )
+        powerObservers = true
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func onPowerChanged() {
+        notifyListeners("powerChanged", data: Self.powerPayload())
+    }
+
+    @objc func powerState(_ call: CAPPluginCall) {
+        call.resolve(Self.powerPayload())
+    }
+
+    private static func powerPayload() -> [String: Any] {
+        let device = UIDevice.current
+        if !device.isBatteryMonitoringEnabled {
+            device.isBatteryMonitoringEnabled = true
+        }
+        var ret: [String: Any] = [
+            "powerSave": ProcessInfo.processInfo.isLowPowerModeEnabled
+        ]
+        if device.batteryLevel >= 0 {
+            ret["level"] = Double(device.batteryLevel)
+        }
+        switch device.batteryState {
+        case .charging, .full:
+            ret["charging"] = true
+        case .unplugged:
+            ret["charging"] = false
+        default:
+            break
+        }
+        return ret
+    }
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported

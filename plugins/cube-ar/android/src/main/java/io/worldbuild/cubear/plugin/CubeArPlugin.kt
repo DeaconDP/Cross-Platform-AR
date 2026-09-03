@@ -1,8 +1,14 @@
 package io.worldbuild.cubear.plugin
 
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
+import android.os.BatteryManager
+import android.os.Build
+import android.os.PowerManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -67,6 +73,8 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var powerReceiver: BroadcastReceiver? = null
+    private var powerReceiverRegistered = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -78,6 +86,68 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+    }
+
+    override fun load() {
+        super.load()
+        if (powerReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                notifyListeners("powerChanged", readPowerState())
+            }
+        }
+        powerReceiver = receiver
+        val filter = IntentFilter().apply {
+            addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+            addAction(Intent.ACTION_BATTERY_CHANGED)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                context.registerReceiver(receiver, filter)
+            }
+            powerReceiverRegistered = true
+        } catch (_: Exception) {
+            powerReceiverRegistered = false
+        }
+    }
+
+    @PluginMethod
+    fun powerState(call: PluginCall) {
+        call.resolve(readPowerState())
+    }
+
+    private fun readPowerState(): JSObject {
+        val ret = JSObject()
+        var save = false
+        try {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            save = pm?.isPowerSaveMode == true
+        } catch (_: Exception) {
+            /* keep false */
+        }
+        ret.put("powerSave", save)
+        try {
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            if (bm != null) {
+                val pct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                if (pct in 0..100) ret.put("level", pct / 100.0)
+                val st = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS)
+                when (st) {
+                    BatteryManager.BATTERY_STATUS_CHARGING,
+                    BatteryManager.BATTERY_STATUS_FULL,
+                    -> ret.put("charging", true)
+                    BatteryManager.BATTERY_STATUS_DISCHARGING,
+                    BatteryManager.BATTERY_STATUS_NOT_CHARGING,
+                    -> ret.put("charging", false)
+                }
+            }
+        } catch (_: Exception) {
+            /* omit */
+        }
+        return ret
     }
 
     @PluginMethod
@@ -702,6 +772,14 @@ class CubeArPlugin : Plugin() {
 
     override fun handleOnDestroy() {
         pendingStartCall = null
+        if (powerReceiverRegistered) {
+            try {
+                powerReceiver?.let { context.unregisterReceiver(it) }
+            } catch (_: Exception) {
+                /* already gone */
+            }
+            powerReceiverRegistered = false
+        }
         detachArView()
         super.handleOnDestroy()
     }

@@ -1,6 +1,7 @@
 import { WebPlugin } from "@capacitor/core";
 import type {
   CubeARPlugin,
+  CubeARPowerState,
   CubeARSessionOptions,
   CubeARSupportResult,
   CubeARTapOptions,
@@ -10,6 +11,10 @@ import type {
 export class CubeARWeb extends WebPlugin implements CubeARPlugin {
   async isSupported(): Promise<CubeARSupportResult> {
     return { supported: false, backend: "none" };
+  }
+
+  async powerState(): Promise<CubeARPowerState> {
+    return { powerSave: false };
   }
 
   async startSession(_options: CubeARSessionOptions): Promise<void> {
