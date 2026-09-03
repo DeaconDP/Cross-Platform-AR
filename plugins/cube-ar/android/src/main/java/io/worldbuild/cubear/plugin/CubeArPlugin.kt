@@ -193,6 +193,25 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun viewMetrics(call: PluginCall) {
+        val view = arSceneView
+        val result = JSObject()
+        if (view == null) {
+            result.put("width", 0)
+            result.put("height", 0)
+            result.put("ready", false)
+            call.resolve(result)
+            return
+        }
+        val w = view.width
+        val h = view.height
+        result.put("width", w)
+        result.put("height", h)
+        result.put("ready", w > 0 && h > 0)
+        call.resolve(result)
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")
