@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async viewMetrics() {
+        return { width: 0, height: 0, ready: false };
+    }
 }

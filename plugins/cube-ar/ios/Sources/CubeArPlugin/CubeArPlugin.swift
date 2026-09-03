@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "viewMetrics", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -58,6 +59,22 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.detachArView()
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
+        }
+    }
+
+    @objc func viewMetrics(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            guard let view = self?.arView else {
+                call.resolve(["width": 0, "height": 0, "ready": false])
+                return
+            }
+            let w = view.bounds.width
+            let h = view.bounds.height
+            call.resolve([
+                "width": w,
+                "height": h,
+                "ready": w > 0 && h > 0,
+            ])
         }
     }
 

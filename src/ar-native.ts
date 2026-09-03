@@ -1,5 +1,11 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import {
+  arPointerHit,
+  readDomVisualViewport,
+  refreshArViewMetrics,
+  rememberViewMetrics,
+} from "./ar-view-space";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -114,12 +120,17 @@ export async function startNativeAR(
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
-    // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
-    const dpr = window.devicePixelRatio || 1;
+    const rect = overlay.root.getBoundingClientRect();
+    const mapped = arPointerHit(
+      event.clientX,
+      event.clientY,
+      rect,
+      readDomVisualViewport(),
+    );
     try {
       const result = await CubeAR.onScreenTap({
-        x: event.clientX * dpr,
-        y: event.clientY * dpr,
+        x: mapped.viewX,
+        y: mapped.viewY,
       });
       if (result.placed) {
         placed = result.count;
@@ -150,10 +161,12 @@ export async function startNativeAR(
       cubeSizeM: CUBE_SIZE,
       colorHex: CUBE_COLOR_HEX,
     });
+    await refreshArViewMetrics(() => CubeAR.viewMetrics());
     document.body.classList.add("ar-native-active");
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    rememberViewMetrics(null);
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
