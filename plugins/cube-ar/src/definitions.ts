@@ -10,6 +10,13 @@ export interface CubeARSupportResult {
 export interface CubeARSessionOptions {
   cubeSizeM: number;
   colorHex: string;
+  lowFx?: boolean;
+}
+
+export interface CubeARPowerState {
+  powerSave?: boolean;
+  level?: number;
+  charging?: boolean;
 }
 
 export interface CubeARTapOptions {
@@ -29,6 +36,7 @@ export interface CubeARTrackingEvent {
 
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
+  powerState(): Promise<CubeARPowerState>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;

@@ -5,6 +5,7 @@ import { startPreview } from "./scene";
 import { isWebXRSupported, startWebXR } from "./ar-webxr";
 import { isQuickLookSupported, prepareQuickLook } from "./ar-quicklook";
 import { isNativeARSupported, nativeARErrorMessage, startNativeAR } from "./ar-native";
+import { arResolvePower } from "./ar-power";
 import { buildCompatSnapshot } from "./ar-debug";
 
 const $ = <T extends HTMLElement>(id: string): T =>
@@ -21,6 +22,7 @@ const overlay = {
   debugPanel: $("debug-panel"),
 };
 
+void arResolvePower();
 startPreview($("preview"));
 
 function setStatus(text: string, isError = false): void {
@@ -164,6 +166,8 @@ async function init(): Promise<void> {
           setPathBusy("webxr", true, "Starting camera\u2026");
           overlay.root.hidden = false;
           try {
+            const profile = await arResolvePower();
+            if (profile.coach) overlay.hint.textContent = profile.coach;
             await startWebXR(overlay, snapshot);
             setStatus("WebXR session ended \u2014 pick another path anytime.");
           } catch {
