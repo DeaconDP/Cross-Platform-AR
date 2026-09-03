@@ -12,6 +12,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "lockPageZoom", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "unlockPageZoom", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var savedMinZoom: CGFloat?
+    private var savedMaxZoom: CGFloat?
+    private var savedBouncesZoom: Bool?
+    private var savedPinchEnabled: Bool?
+    private var savedLinkPreview: Bool?
+    private var savedDoubleTap: [UIGestureRecognizer] = []
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -57,6 +65,20 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async { [weak self] in
             self?.detachArView()
             self?.notifyListeners("sessionEnded", data: [:])
+            call.resolve()
+        }
+    }
+
+    @objc func lockPageZoom(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.applyPageZoomLock()
+            call.resolve()
+        }
+    }
+
+    @objc func unlockPageZoom(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.restorePageZoomLock()
             call.resolve()
         }
     }
@@ -107,6 +129,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        applyPageZoomLock()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -128,6 +151,58 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         bridge?.webView.isOpaque = true
         bridge?.webView.backgroundColor = .white
+        restorePageZoomLock()
+    }
+
+    private func applyPageZoomLock() {
+        guard let web = bridge?.webView, savedMinZoom == nil else { return }
+        let scroll = web.scrollView
+        savedMinZoom = scroll.minimumZoomScale
+        savedMaxZoom = scroll.maximumZoomScale
+        savedBouncesZoom = scroll.bouncesZoom
+        savedPinchEnabled = scroll.pinchGestureRecognizer?.isEnabled
+        savedLinkPreview = web.allowsLinkPreview
+        scroll.minimumZoomScale = 1
+        scroll.maximumZoomScale = 1
+        scroll.bouncesZoom = false
+        scroll.pinchGestureRecognizer?.isEnabled = false
+        web.allowsLinkPreview = false
+        savedDoubleTap = []
+        for gesture in scroll.gestureRecognizers ?? [] {
+            if let tap = gesture as? UITapGestureRecognizer,
+               tap.numberOfTapsRequired == 2,
+               tap.isEnabled {
+                savedDoubleTap.append(tap)
+                tap.isEnabled = false
+            }
+        }
+    }
+
+    private func restorePageZoomLock() {
+        guard let web = bridge?.webView else {
+            savedMinZoom = nil
+            savedMaxZoom = nil
+            savedBouncesZoom = nil
+            savedPinchEnabled = nil
+            savedLinkPreview = nil
+            savedDoubleTap = []
+            return
+        }
+        let scroll = web.scrollView
+        if let minZ = savedMinZoom { scroll.minimumZoomScale = minZ }
+        if let maxZ = savedMaxZoom { scroll.maximumZoomScale = maxZ }
+        if let bounce = savedBouncesZoom { scroll.bouncesZoom = bounce }
+        if let pinch = savedPinchEnabled {
+            scroll.pinchGestureRecognizer?.isEnabled = pinch
+        }
+        if let preview = savedLinkPreview { web.allowsLinkPreview = preview }
+        for gesture in savedDoubleTap { gesture.isEnabled = true }
+        savedDoubleTap = []
+        savedMinZoom = nil
+        savedMaxZoom = nil
+        savedBouncesZoom = nil
+        savedPinchEnabled = nil
+        savedLinkPreview = nil
     }
 
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {

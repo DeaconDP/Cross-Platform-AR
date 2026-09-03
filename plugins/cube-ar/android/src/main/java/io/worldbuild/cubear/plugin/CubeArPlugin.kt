@@ -12,6 +12,7 @@ import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.webkit.WebView
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.Lifecycle
@@ -67,6 +68,11 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var savedSupportZoom: Boolean? = null
+    private var savedBuiltInZoom: Boolean? = null
+    private var savedDisplayZoom: Boolean? = null
+    private var savedLongClickable = false
+    private var pageZoomLocked = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -183,6 +189,22 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun lockPageZoom(call: PluginCall) {
+        bridge.executeOnMainThread {
+            applyPageZoomLock()
+            call.resolve()
+        }
+    }
+
+    @PluginMethod
+    fun unlockPageZoom(call: PluginCall) {
+        bridge.executeOnMainThread {
+            restorePageZoomLock()
+            call.resolve()
+        }
+    }
+
+    @PluginMethod
     fun stopSession(call: PluginCall) {
         pendingStartCall = null
         bridge.executeOnMainThread {
@@ -230,6 +252,7 @@ class CubeArPlugin : Plugin() {
 
         webView.setBackgroundColor(Color.TRANSPARENT)
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        applyPageZoomLock()
 
         var parent: android.view.ViewParent? = webView.parent
         while (parent is View) {
@@ -642,6 +665,40 @@ class CubeArPlugin : Plugin() {
         val webView = bridge.webView
         webView.setBackgroundColor(Color.WHITE)
         webView.setLayerType(View.LAYER_TYPE_NONE, null)
+        restorePageZoomLock()
+    }
+
+    private fun applyPageZoomLock() {
+        val wv = bridge.webView as? WebView ?: return
+        if (pageZoomLocked) return
+        val settings = wv.settings
+        savedSupportZoom = settings.supportZoom()
+        savedBuiltInZoom = settings.builtInZoomControls
+        savedDisplayZoom = settings.displayZoomControls
+        savedLongClickable = wv.isLongClickable
+        settings.setSupportZoom(false)
+        settings.builtInZoomControls = false
+        settings.displayZoomControls = false
+        wv.setOnLongClickListener { true }
+        wv.isLongClickable = false
+        pageZoomLocked = true
+    }
+
+    private fun restorePageZoomLock() {
+        if (!pageZoomLocked) return
+        val wv = bridge.webView as? WebView
+        if (wv != null) {
+            val settings = wv.settings
+            savedSupportZoom?.let { settings.setSupportZoom(it) }
+            savedBuiltInZoom?.let { settings.builtInZoomControls = it }
+            savedDisplayZoom?.let { settings.displayZoomControls = it }
+            wv.setOnLongClickListener(null)
+            wv.isLongClickable = savedLongClickable
+        }
+        savedSupportZoom = null
+        savedBuiltInZoom = null
+        savedDisplayZoom = null
+        pageZoomLocked = false
     }
 
     private fun parseHexColor(hex: String): Triple<Float, Float, Float> {
