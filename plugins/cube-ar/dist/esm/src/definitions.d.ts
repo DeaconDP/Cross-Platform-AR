@@ -15,6 +15,7 @@ export interface CubeARTapOptions {
 export interface CubeARTapResult {
     placed: boolean;
     count: number;
+    quiet?: boolean;
 }
 export interface CubeARTrackingEvent {
     state: "initializing" | "ready" | "limited" | "unavailable";
@@ -25,6 +26,7 @@ export interface CubeARPlugin {
     startSession(options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+    announce(options: { text: string }): Promise<void>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;
     removeAllListeners(): Promise<void>;

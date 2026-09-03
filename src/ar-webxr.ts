@@ -6,6 +6,13 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import {
+  AR_READY_QUIET_MS,
+  arReadyCoach,
+  arReadyCreate,
+  arReadyOpen,
+  arReadySpeak,
+} from "./ar-ready";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -72,12 +79,29 @@ export async function startWebXR(
   const unbindSession = debug.bindSession(session);
 
   let placed = 0;
+  const ready = arReadyCreate(performance.now());
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
-  overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.hint.setAttribute("aria-live", "polite");
+  overlay.hint.textContent = arReadyCoach(ready, performance.now(), "cube", false);
+
+  const publishVoice = (kind: Parameters<typeof arReadySpeak>[1]) => {
+    const text = arReadySpeak(ready, kind, "cube", performance.now());
+    if (!text) return;
+    overlay.hint.hidden = false;
+    overlay.hint.textContent = text;
+  };
+  publishVoice("quiet");
+  window.setTimeout(() => {
+    if (placed === 0) publishVoice("scan");
+  }, AR_READY_QUIET_MS + 16);
 
   session.addEventListener("select", () => {
-    if (!reticle.visible) return;
+    if (!arReadyOpen(ready, performance.now())) return;
+    if (!reticle.visible) {
+      publishVoice("miss");
+      return;
+    }
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
     cube.rotateY(Math.random() * Math.PI * 2);
@@ -85,6 +109,7 @@ export async function startWebXR(
     placed++;
     overlay.count.textContent = String(placed);
     overlay.hint.hidden = true;
+    publishVoice("placed");
     debug.logEvent(`cube placed (#${placed})`);
   });
 

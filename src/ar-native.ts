@@ -8,6 +8,15 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  AR_READY_QUIET_MS,
+  arReadyCoach,
+  arReadyCreate,
+  arReadyNotePointer,
+  arReadyOpen,
+  arReadySpeak,
+  type ArReadyState,
+} from "./ar-ready";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -87,14 +96,29 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  let ready: ArReadyState = arReadyCreate(performance.now());
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
-  overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.hint.textContent = arReadyCoach(ready, performance.now(), "cube", false);
+  overlay.hint.setAttribute("aria-live", "polite");
+
+  const publishVoice = (kind: Parameters<typeof arReadySpeak>[1]) => {
+    const text = arReadySpeak(ready, kind, "cube", performance.now());
+    if (!text) return;
+    overlay.hint.hidden = false;
+    overlay.hint.textContent = text;
+    void CubeAR.announce({ text }).catch(() => undefined);
+  };
+  publishVoice("quiet");
+  window.setTimeout(() => {
+    if (placed === 0) publishVoice("scan");
+  }, AR_READY_QUIET_MS + 16);
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    if (event.message && placed === 0 && arReadyOpen(ready, performance.now())) {
       overlay.hint.textContent = event.message;
+      if (event.state === "ready") publishVoice("plane");
     }
     if (debug.isEnabled()) {
       debug.tickNative({
@@ -113,6 +137,11 @@ export async function startNativeAR(
   const onTap = async (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    if (event.type === "pointerdown") {
+      arReadyNotePointer(ready, true, performance.now());
+    }
+
+    if (!arReadyOpen(ready, performance.now())) return;
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
@@ -121,18 +150,27 @@ export async function startNativeAR(
         x: event.clientX * dpr,
         y: event.clientY * dpr,
       });
+      if (result.quiet) return;
       if (result.placed) {
         placed = result.count;
         overlay.count.textContent = String(placed);
         overlay.hint.hidden = true;
+        publishVoice("placed");
         debug.logEvent(`cube placed (#${placed})`);
+      } else {
+        publishVoice("miss");
       }
     } catch {
       debug.logEvent("tap failed");
     }
   };
 
+  const onPointerUp = () => {
+    arReadyNotePointer(ready, false, performance.now());
+  };
   document.addEventListener("pointerdown", onTap);
+  document.addEventListener("pointerup", onPointerUp);
+  document.addEventListener("pointercancel", onPointerUp);
 
   const onExit = async () => {
     overlay.exit.disabled = true;
@@ -155,6 +193,8 @@ export async function startNativeAR(
     await sessionEnded;
   } finally {
     document.removeEventListener("pointerdown", onTap);
+    document.removeEventListener("pointerup", onPointerUp);
+    document.removeEventListener("pointercancel", onPointerUp);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();

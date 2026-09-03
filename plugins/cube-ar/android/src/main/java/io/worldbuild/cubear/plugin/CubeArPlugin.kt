@@ -78,7 +78,16 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+        private const val INPUT_QUIET_MS = 480L
     }
+
+    private var inputQuietUntilMs = 0L
+
+    private fun armInputQuiet() {
+        inputQuietUntilMs = System.currentTimeMillis() + INPUT_QUIET_MS
+    }
+
+    private fun inputQuiet(): Boolean = System.currentTimeMillis() < inputQuietUntilMs
 
     @PluginMethod
     fun isSupported(call: PluginCall) {
@@ -149,6 +158,7 @@ class CubeArPlugin : Plugin() {
                 attachArView(
                     onReady = {
                         notifyTracking("initializing", "Starting ARCore session")
+                        armInputQuiet()
                         call.resolve()
                     },
                     onFailed = { ex ->
@@ -193,7 +203,27 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun announce(call: PluginCall) {
+        val text = call.getString("text") ?: ""
+        bridge.executeOnMainThread {
+            val web = bridge.webView
+            if (text.isNotEmpty()) {
+                web?.announceForAccessibility(text)
+            }
+            call.resolve()
+        }
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
+        if (inputQuiet()) {
+            val result = JSObject()
+            result.put("placed", false)
+            result.put("count", placedCount)
+            result.put("quiet", true)
+            call.resolve(result)
+            return
+        }
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")
             return
