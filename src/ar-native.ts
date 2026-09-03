@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { raceArCall } from "./ar-call-deadline";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -117,10 +118,20 @@ export async function startNativeAR(
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
     try {
-      const result = await CubeAR.onScreenTap({
-        x: event.clientX * dpr,
-        y: event.clientY * dpr,
+      const raced = await raceArCall({
+        kind: "tap",
+        run: () =>
+          CubeAR.onScreenTap({
+            x: event.clientX * dpr,
+            y: event.clientY * dpr,
+          }),
+        fallback: { placed: false, count: placed },
       });
+      const result = raced.value;
+      if (raced.timedOut) {
+        debug.logEvent("tap timed out");
+        return;
+      }
       if (result.placed) {
         placed = result.count;
         overlay.count.textContent = String(placed);
@@ -137,7 +148,11 @@ export async function startNativeAR(
   const onExit = async () => {
     overlay.exit.disabled = true;
     try {
-      await CubeAR.stopSession();
+      await raceArCall({
+        kind: "stop",
+        run: () => CubeAR.stopSession(),
+        fallback: undefined,
+      });
     } catch {
       // session may already be torn down
     }

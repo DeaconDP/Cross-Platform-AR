@@ -78,6 +78,7 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+        private const val TAP_TIMEOUT_MS = 1500L
     }
 
     @PluginMethod
@@ -203,7 +204,20 @@ class CubeArPlugin : Plugin() {
             return
         }
 
+        val done = booleanArrayOf(false)
+        val timeout = Runnable {
+            if (done[0]) return@Runnable
+            done[0] = true
+            val result = JSObject()
+            result.put("placed", false)
+            result.put("count", placedCount)
+            call.resolve(result)
+        }
+        mainHandler.postDelayed(timeout, TAP_TIMEOUT_MS)
         bridge.executeOnMainThread {
+            if (done[0]) return@executeOnMainThread
+            done[0] = true
+            mainHandler.removeCallbacks(timeout)
             val view = arSceneView
             if (view == null) {
                 val result = JSObject()
