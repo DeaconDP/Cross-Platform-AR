@@ -116,6 +116,15 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.18);
 }
 
+html.is-ar-zoom-lock,
+html.is-ar-zoom-lock body {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  overscroll-behavior: none;
+}
+
 body.ar-native-active {
   background: transparent !important;
 }

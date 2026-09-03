@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arZoomArm, arZoomCoach, arZoomCreate } from "./ar-zoom-lock";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -89,7 +90,11 @@ export async function startNativeAR(
   let placed = 0;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
-  overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.hint.textContent =
+    arZoomCoach("cube", window.visualViewport?.scale ?? 1) ??
+    "Move your phone to find a surface";
+  const releaseZoom = arZoomArm(arZoomCreate(window.visualViewport?.scale ?? 1));
+  void CubeAR.lockPageZoom().catch(() => undefined);
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -154,6 +159,8 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    releaseZoom();
+    void CubeAR.unlockPageZoom().catch(() => undefined);
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;

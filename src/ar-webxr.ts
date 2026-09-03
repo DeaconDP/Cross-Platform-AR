@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arZoomArm, arZoomCoach, arZoomCreate } from "./ar-zoom-lock";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -74,7 +75,10 @@ export async function startWebXR(
   let placed = 0;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
-  overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.hint.textContent =
+    arZoomCoach("cube", window.visualViewport?.scale ?? 1) ??
+    "Move your phone to find a surface";
+  const releaseZoom = arZoomArm(arZoomCreate(window.visualViewport?.scale ?? 1));
 
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
@@ -94,6 +98,7 @@ export async function startWebXR(
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    releaseZoom();
     unwireDebug();
     unbindSession();
     await session.end();
@@ -157,6 +162,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  releaseZoom();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
