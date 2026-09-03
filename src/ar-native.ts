@@ -7,6 +7,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { createArWorldLease } from "./ar-world-freshness";
 import type { OverlayElements } from "./ar-webxr";
 
 /** Map native plugin rejection messages to actionable user guidance. */
@@ -91,6 +92,9 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const lease = createArWorldLease();
+  const leaseGen = lease.begin();
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
@@ -108,6 +112,14 @@ export async function startNativeAR(
 
   const sessionEnded = new Promise<void>((resolve) => {
     void CubeAR.addListener("sessionEnded", () => resolve());
+  });
+
+  const resetListener = await CubeAR.addListener("trackingReset", () => {
+    placed = 0;
+    overlay.count.textContent = "0";
+    overlay.hint.hidden = false;
+    overlay.hint.textContent = "Move your phone to find a surface";
+    debug.logEvent("world reset after long pause");
   });
 
   const onTap = async (event: PointerEvent) => {
@@ -146,18 +158,26 @@ export async function startNativeAR(
 
   try {
     stopPreview();
-    await CubeAR.startSession({
-      cubeSizeM: CUBE_SIZE,
-      colorHex: CUBE_COLOR_HEX,
-    });
+    await lease.withLease(
+      CubeAR.startSession({
+        cubeSizeM: CUBE_SIZE,
+        colorHex: CUBE_COLOR_HEX,
+      }),
+    );
+    if (!lease.isCurrent(leaseGen)) {
+      await CubeAR.stopSession().catch(() => undefined);
+      return;
+    }
     document.body.classList.add("ar-native-active");
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    lease.end();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
+    resetListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();
