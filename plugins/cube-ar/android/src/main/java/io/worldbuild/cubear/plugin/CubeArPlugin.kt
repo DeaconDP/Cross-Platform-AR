@@ -3,6 +3,8 @@ package io.worldbuild.cubear.plugin
 import android.Manifest
 import android.content.Context
 import android.graphics.Color
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -12,6 +14,7 @@ import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.Lifecycle
@@ -67,6 +70,8 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var torchCameraId: String? = null
+    private var savedBrightness: Float? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -221,6 +226,78 @@ class CubeArPlugin : Plugin() {
         }
     }
 
+    @PluginMethod
+    fun torchAvailable(call: PluginCall) {
+        val result = JSObject()
+        result.put("available", findTorchCamera() != null)
+        call.resolve(result)
+    }
+
+    @PluginMethod
+    fun setTorch(call: PluginCall) {
+        val on = call.getBoolean("on") ?: false
+        activity?.runOnUiThread {
+            val result = JSObject()
+            result.put("on", applyTorch(on))
+            call.resolve(result)
+        } ?: run {
+            val result = JSObject()
+            result.put("on", false)
+            call.resolve(result)
+        }
+    }
+
+    private fun findTorchCamera(): String? {
+        torchCameraId?.let { return it }
+        return try {
+            val cm = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+                ?: return null
+            for (id in cm.cameraIdList) {
+                val chars = cm.getCameraCharacteristics(id)
+                val flash = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE)
+                val facing = chars.get(CameraCharacteristics.LENS_FACING)
+                if (flash == true && facing == CameraCharacteristics.LENS_FACING_BACK) {
+                    torchCameraId = id
+                    return id
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun applyTorch(on: Boolean): Boolean {
+        val id = findTorchCamera() ?: return false
+        return try {
+            val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            cm.setTorchMode(id, on)
+            on
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun boostScreen() {
+        val window = activity?.window ?: return
+        val lp = window.attributes
+        if (savedBrightness == null) {
+            savedBrightness = lp.screenBrightness
+        }
+        lp.screenBrightness = 1f
+        window.attributes = lp
+    }
+
+    private fun restoreLight() {
+        applyTorch(false)
+        val brightness = savedBrightness ?: return
+        val window = activity?.window ?: return
+        val lp = window.attributes
+        lp.screenBrightness = brightness
+        window.attributes = lp
+        savedBrightness = null
+    }
+
     private fun attachArView(onReady: () -> Unit, onFailed: (Exception) -> Unit = {}) {
         detachArView()
 
@@ -353,6 +430,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        boostScreen()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -626,6 +704,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        restoreLight()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

@@ -5,4 +5,12 @@ export declare class CubeARWeb extends WebPlugin implements CubeARPlugin {
     startSession(_options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult>;
+    torchAvailable(): Promise<{
+        available: boolean;
+    }>;
+    setTorch(_options: {
+        on: boolean;
+    }): Promise<{
+        on: boolean;
+    }>;
 }

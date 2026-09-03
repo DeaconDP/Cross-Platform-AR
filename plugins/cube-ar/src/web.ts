@@ -23,4 +23,12 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
   }
+
+  async torchAvailable(): Promise<{ available: boolean }> {
+    return { available: false };
+  }
+
+  async setTorch(_options: { on: boolean }): Promise<{ on: boolean }> {
+    return { on: false };
+  }
 }

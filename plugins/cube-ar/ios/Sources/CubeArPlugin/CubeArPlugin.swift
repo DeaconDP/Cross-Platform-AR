@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import Capacitor
 import SceneKit
 import UIKit
@@ -12,6 +13,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "torchAvailable", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setTorch", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +23,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var savedBrightness: CGFloat?
+    private var torchOn = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -58,6 +63,17 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.detachArView()
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
+        }
+    }
+
+    @objc func torchAvailable(_ call: CAPPluginCall) {
+        call.resolve(["available": captureDeviceWithTorch() != nil])
+    }
+
+    @objc func setTorch(_ call: CAPPluginCall) {
+        let on = call.getBool("on") ?? false
+        DispatchQueue.main.async {
+            call.resolve(["on": self.applyTorch(on)])
         }
     }
 
@@ -107,6 +123,52 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        boostScreen()
+    }
+
+    private func captureDeviceWithTorch() -> AVCaptureDevice? {
+        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+           device.hasTorch {
+            return device
+        }
+        guard let device = AVCaptureDevice.default(for: .video), device.hasTorch else { return nil }
+        return device
+    }
+
+    private func applyTorch(_ on: Bool) -> Bool {
+        guard let device = captureDeviceWithTorch() else { return false }
+        do {
+            try device.lockForConfiguration()
+            if on, device.isTorchModeSupported(.on) {
+                try device.setTorchModeOn(level: 0.7)
+                torchOn = true
+            } else {
+                if device.isTorchModeSupported(.off) {
+                    device.torchMode = .off
+                }
+                torchOn = false
+            }
+            device.unlockForConfiguration()
+            return torchOn
+        } catch {
+            torchOn = false
+            return false
+        }
+    }
+
+    private func boostScreen() {
+        if savedBrightness == nil {
+            savedBrightness = UIScreen.main.brightness
+        }
+        UIScreen.main.brightness = 1
+    }
+
+    private func restoreLight() {
+        _ = applyTorch(false)
+        if let brightness = savedBrightness {
+            UIScreen.main.brightness = brightness
+            savedBrightness = nil
+        }
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +182,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        restoreLight()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

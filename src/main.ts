@@ -17,6 +17,7 @@ const overlay = {
   count: $("cube-count"),
   hint: $("ar-hint"),
   exit: $<HTMLButtonElement>("exit-ar"),
+  light: $<HTMLButtonElement>("ar-light"),
   debugToggle: $<HTMLButtonElement>("debug-toggle"),
   debugPanel: $("debug-panel"),
 };

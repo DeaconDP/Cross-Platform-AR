@@ -21,6 +21,7 @@ export interface OverlayElements {
   count: HTMLElement;
   hint: HTMLElement;
   exit: HTMLButtonElement;
+  light: HTMLButtonElement;
   debugToggle: HTMLButtonElement;
   debugPanel: HTMLElement;
 }
@@ -75,6 +76,7 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.light.hidden = true;
 
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
