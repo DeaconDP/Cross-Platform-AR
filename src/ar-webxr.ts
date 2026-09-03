@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { attachArShell } from "./ar-shell";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -90,6 +91,10 @@ export async function startWebXR(
 
   const onExit = () => session.end();
   overlay.exit.addEventListener("click", onExit);
+  const releaseShell = attachArShell({
+    onExit,
+    historyTrap: true,
+  });
 
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
@@ -156,6 +161,7 @@ export async function startWebXR(
     session.addEventListener("end", () => resolve(), { once: true });
   });
 
+  releaseShell();
   overlay.exit.removeEventListener("click", onExit);
   unwireDebug();
   unbindSession();

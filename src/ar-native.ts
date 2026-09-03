@@ -8,6 +8,13 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  attachArShell,
+  gestureTravelPx,
+  isPlacementTap,
+  onSessionBack,
+  pointerEndKind,
+} from "./ar-shell";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -110,9 +117,28 @@ export async function startNativeAR(
     void CubeAR.addListener("sessionEnded", () => resolve());
   });
 
-  const onTap = async (event: PointerEvent) => {
+  let tapStart: { id: number; x: number; y: number } | null = null;
+
+  const onPointerDown = (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    tapStart = { id: event.pointerId, x: event.clientX, y: event.clientY };
+  };
+
+  const onPointerEnd = async (event: PointerEvent) => {
+    const start = tapStart;
+    if (!start || event.pointerId !== start.id) return;
+    tapStart = null;
+    const travel = gestureTravelPx(start.x, start.y, event.clientX, event.clientY);
+    if (
+      !isPlacementTap({
+        kind: pointerEndKind(event.type),
+        remainingPointers: 0,
+        travelPx: travel,
+      })
+    ) {
+      return;
+    }
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
@@ -132,8 +158,6 @@ export async function startNativeAR(
     }
   };
 
-  document.addEventListener("pointerdown", onTap);
-
   const onExit = async () => {
     overlay.exit.disabled = true;
     try {
@@ -142,7 +166,21 @@ export async function startNativeAR(
       // session may already be torn down
     }
   };
+
+  document.addEventListener("pointerdown", onPointerDown);
+  document.addEventListener("pointerup", onPointerEnd);
+  document.addEventListener("pointercancel", onPointerEnd);
   overlay.exit.addEventListener("click", onExit);
+
+  const releaseShell = attachArShell({
+    onExit: () => {
+      void onExit();
+    },
+    historyTrap: true,
+  });
+  const backListener = await CubeAR.addListener("backPressed", () => {
+    if (onSessionBack(true) === "close-session") void onExit();
+  });
 
   try {
     stopPreview();
@@ -154,7 +192,11 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
-    document.removeEventListener("pointerdown", onTap);
+    releaseShell();
+    await backListener.remove();
+    document.removeEventListener("pointerdown", onPointerDown);
+    document.removeEventListener("pointerup", onPointerEnd);
+    document.removeEventListener("pointercancel", onPointerEnd);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();

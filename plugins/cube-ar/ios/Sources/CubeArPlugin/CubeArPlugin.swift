@@ -20,6 +20,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var originalBounces = true
+    private var originalScrollEnabled = true
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -85,8 +87,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             throw NSError(domain: "CubeAR", code: 1, userInfo: [NSLocalizedDescriptionKey: "WebView unavailable"])
         }
 
+        originalBounces = webView.scrollView.bounces
+        originalScrollEnabled = webView.scrollView.isScrollEnabled
         webView.isOpaque = false
         webView.backgroundColor = .clear
+        webView.scrollView.bounces = false
+        webView.scrollView.isScrollEnabled = false
 
         let view = ARSCNView(frame: webView.bounds)
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -126,8 +132,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = nil
         surfaceFound = false
 
-        bridge?.webView.isOpaque = true
-        bridge?.webView.backgroundColor = .white
+        if let webView = bridge?.webView {
+            webView.isOpaque = true
+            webView.backgroundColor = .white
+            webView.scrollView.bounces = originalBounces
+            webView.scrollView.isScrollEnabled = originalScrollEnabled
+        }
     }
 
     private func placeCube(at point: CGPoint, in view: ARSCNView) -> Bool {
