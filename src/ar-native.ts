@@ -7,7 +7,23 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import {
+  arApplySafeVars,
+  arArmSafe,
+  arParseNativeInsets,
+  arReadHostInsets,
+  type ArInsets,
+} from "./ar-safe";
 import type { OverlayElements } from "./ar-webxr";
+
+export async function nativeSafeInsets(): Promise<ArInsets | null> {
+  if (!Capacitor.isNativePlatform()) return null;
+  try {
+    return arParseNativeInsets(await CubeAR.safeInsets());
+  } catch {
+    return null;
+  }
+}
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -134,6 +150,12 @@ export async function startNativeAR(
 
   document.addEventListener("pointerdown", onTap);
 
+  const safeArm = arArmSafe({
+    readCss: () => arReadHostInsets(overlay.root),
+    readNative: nativeSafeInsets,
+    apply: (chrome) => arApplySafeVars(overlay.root, chrome),
+  });
+
   const onExit = async () => {
     overlay.exit.disabled = true;
     try {
@@ -154,6 +176,7 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    safeArm.dispose();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;

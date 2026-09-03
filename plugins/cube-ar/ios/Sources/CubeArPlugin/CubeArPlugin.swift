@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "safeInsets", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -58,6 +59,18 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.detachArView()
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
+        }
+    }
+
+    @objc func safeInsets(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            let insets = self.bridge?.viewController?.view.safeAreaInsets ?? .zero
+            call.resolve([
+                "top": Double(insets.top),
+                "right": Double(insets.right),
+                "bottom": Double(insets.bottom),
+                "left": Double(insets.left)
+            ])
         }
     }
 
