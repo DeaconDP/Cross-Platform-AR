@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "syncLayout", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var lastViewSize: CGSize = .zero
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -59,6 +61,19 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func syncLayout(_ call: CAPPluginCall) {
+        emitLayoutIfChanged()
+        call.resolve()
+    }
+
+    private func emitLayoutIfChanged() {
+        guard let arView else { return }
+        let size = arView.bounds.size
+        if size == lastViewSize { return }
+        lastViewSize = size
+        notifyListeners("layoutChanged", data: ["w": size.width, "h": size.height])
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -125,6 +140,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView = nil
         reticleNode = nil
         surfaceFound = false
+        lastViewSize = .zero
 
         bridge?.webView.isOpaque = true
         bridge?.webView.backgroundColor = .white
@@ -190,6 +206,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard let view = arView, let frame = view.session.currentFrame else { return }
+        emitLayoutIfChanged()
         DispatchQueue.main.async { [weak self] in
             self?.updateReticle(in: view, frame: frame)
         }

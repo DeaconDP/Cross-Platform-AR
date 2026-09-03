@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arArmLayout, arMeasureHost } from "./ar-layout";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -72,12 +73,24 @@ export async function startWebXR(
   const unbindSession = debug.bindSession(session);
 
   let placed = 0;
+  let layoutUsable = true;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const layoutArm = arArmLayout({
+    measure: () => arMeasureHost(overlay.root),
+    onChange: (verdict) => {
+      layoutUsable = verdict.usable;
+      if (verdict.coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = verdict.coach;
+      }
+    },
+  });
+
   session.addEventListener("select", () => {
-    if (!reticle.visible) return;
+    if (!layoutUsable || !reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
     cube.rotateY(Math.random() * Math.PI * 2);
@@ -94,6 +107,7 @@ export async function startWebXR(
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    layoutArm.dispose();
     unwireDebug();
     unbindSession();
     await session.end();
@@ -157,6 +171,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  layoutArm.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
