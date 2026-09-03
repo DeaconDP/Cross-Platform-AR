@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { AR_STAY_COPY, arReadOrientation, arStay, arStayMismatch, arStaySnapshot } from "./ar-stay";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -134,6 +135,15 @@ export async function startNativeAR(
 
   document.addEventListener("pointerdown", onTap);
 
+  const stay = arStay();
+  const onRotate = () => {
+    if (arStayMismatch(stay.orientation, arReadOrientation(arStaySnapshot()))) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = AR_STAY_COPY.rotate;
+    }
+  };
+  window.addEventListener("orientationchange", onRotate);
+
   const onExit = async () => {
     overlay.exit.disabled = true;
     try {
@@ -154,6 +164,8 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    window.removeEventListener("orientationchange", onRotate);
+    stay.release();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;

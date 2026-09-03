@@ -20,6 +20,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var stayArmed = false
+    private var stayPrevIdle = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -107,6 +109,20 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        armStay()
+    }
+
+    private func armStay() {
+        guard !stayArmed else { return }
+        stayArmed = true
+        stayPrevIdle = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+
+    private func disarmStay() {
+        guard stayArmed else { return }
+        stayArmed = false
+        UIApplication.shared.isIdleTimerDisabled = stayPrevIdle
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +136,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        disarmStay()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

@@ -2,16 +2,21 @@ package io.worldbuild.cubear.plugin
 
 import android.Manifest
 import android.content.Context
+import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.WindowInsets
+import android.view.WindowInsetsController
+import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.Lifecycle
@@ -67,6 +72,11 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var stayArmed = false
+    private var staySetKeepOn = false
+    private var staySetOrientation = false
+    private var stayPrevOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    private var stayPrevSystemUi: Int? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -221,6 +231,66 @@ class CubeArPlugin : Plugin() {
         }
     }
 
+    private fun armStay() {
+        if (stayArmed) return
+        val act = activity ?: return
+        stayArmed = true
+        val w = act.window
+        val already = w.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
+        if (!already) {
+            w.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            staySetKeepOn = true
+        }
+        stayPrevOrientation = act.requestedOrientation
+        act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+        staySetOrientation = true
+        if (Build.VERSION.SDK_INT >= 30) {
+            w.insetsController?.let { c ->
+                c.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                c.systemBarsBehavior =
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            val decor = w.decorView
+            stayPrevSystemUi = decor.systemUiVisibility
+            @Suppress("DEPRECATION")
+            decor.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    or View.SYSTEM_UI_FLAG_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                )
+        }
+    }
+
+    private fun disarmStay() {
+        if (!stayArmed) return
+        stayArmed = false
+        val act = activity ?: return
+        val w = act.window
+        if (staySetKeepOn) {
+            w.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            staySetKeepOn = false
+        }
+        if (staySetOrientation) {
+            act.requestedOrientation = stayPrevOrientation
+            staySetOrientation = false
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            w.insetsController?.show(
+                WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars(),
+            )
+        } else {
+            stayPrevSystemUi?.let { prev ->
+                @Suppress("DEPRECATION")
+                w.decorView.systemUiVisibility = prev
+                stayPrevSystemUi = null
+            }
+        }
+    }
+
     private fun attachArView(onReady: () -> Unit, onFailed: (Exception) -> Unit = {}) {
         detachArView()
 
@@ -353,6 +423,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        armStay()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -626,6 +697,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        disarmStay()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
