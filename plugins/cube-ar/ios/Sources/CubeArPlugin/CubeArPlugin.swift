@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import Capacitor
 import SceneKit
 import UIKit
@@ -9,6 +10,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "CubeAR"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "isSupported", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "preflight", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
@@ -26,6 +28,26 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve([
             "supported": supported,
             "backend": supported ? "arkit" : "none",
+        ])
+    }
+
+    @objc func preflight(_ call: CAPPluginCall) {
+        let permission: String
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            permission = "granted"
+        case .notDetermined:
+            permission = "prompt"
+        case .denied, .restricted:
+            permission = "denied"
+        @unknown default:
+            permission = "unknown"
+        }
+        let supported = ARWorldTrackingConfiguration.isSupported
+        call.resolve([
+            "permission": permission,
+            "available": supported,
+            "installNeeded": false,
         ])
     }
 

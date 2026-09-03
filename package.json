@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --experimental-strip-types --test __tests__/ar-preflight.test.ts",
     "build": "npm run build --prefix plugins/cube-ar && tsc && vite build",
     "preview": "vite preview",
     "cap:sync": "npm run build && npx cap sync",

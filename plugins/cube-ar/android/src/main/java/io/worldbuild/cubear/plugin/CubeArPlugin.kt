@@ -91,6 +91,32 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun preflight(call: PluginCall) {
+        val state = getPermissionState("camera")
+        val permission = when (state) {
+            PermissionState.GRANTED -> "granted"
+            PermissionState.DENIED -> "denied"
+            else -> "prompt"
+        }
+        var available = false
+        var installNeeded = false
+        try {
+            val av = ArCoreApk.getInstance().checkAvailability(context)
+            available = av.isSupported || av.isTransient || av.isUnknown
+            installNeeded =
+                av == ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED ||
+                    av == ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD
+        } catch (_: Exception) {
+            available = false
+        }
+        val result = JSObject()
+        result.put("permission", permission)
+        result.put("available", available)
+        result.put("installNeeded", installNeeded)
+        call.resolve(result)
+    }
+
+    @PluginMethod
     fun startSession(call: PluginCall) {
         val size = call.getDouble("cubeSizeM")?.toFloat() ?: 0.12f
         val color = call.getString("colorHex") ?: "#30d158"
