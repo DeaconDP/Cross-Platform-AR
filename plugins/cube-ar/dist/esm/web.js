@@ -12,4 +12,10 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async torchAvailable() {
+        return { available: false };
+    }
+    async setTorch(_options) {
+        return { on: false };
+    }
 }

@@ -7,6 +7,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arCoachLight, arLightLabel } from "./ar-light";
 import type { OverlayElements } from "./ar-webxr";
 
 /** Map native plugin rejection messages to actionable user guidance. */
@@ -90,6 +91,55 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.light.hidden = true;
+  overlay.light.setAttribute("aria-pressed", "false");
+  overlay.light.textContent = arLightLabel(false);
+
+  let torchOn = false;
+  let torchOk = false;
+  const syncLight = () => {
+    overlay.light.hidden = !torchOk;
+    overlay.light.setAttribute("aria-pressed", String(torchOn));
+    overlay.light.textContent = arLightLabel(torchOn);
+    const coach = arCoachLight({
+      torchAvailable: torchOk,
+      torchOn,
+      placed: placed > 0,
+    });
+    if (coach && placed === 0) {
+      overlay.hint.textContent = coach;
+      overlay.hint.hidden = false;
+    }
+  };
+  const onLight = async () => {
+    if (overlay.light.getAttribute("aria-busy") === "true") return;
+    overlay.light.setAttribute("aria-busy", "true");
+    try {
+      const next = !torchOn;
+      const applied = await CubeAR.setTorch({ on: next });
+      torchOn = applied.on && next;
+      if (next && !applied.on) {
+        overlay.hint.textContent = "Couldn’t turn on the light. Move to a brighter spot.";
+        overlay.hint.hidden = false;
+      } else {
+        syncLight();
+      }
+    } catch {
+      overlay.hint.textContent = "Couldn’t turn on the light. Move to a brighter spot.";
+      overlay.hint.hidden = false;
+    } finally {
+      overlay.light.removeAttribute("aria-busy");
+    }
+  };
+  overlay.light.addEventListener("click", onLight);
+  void CubeAR.torchAvailable()
+    .then((res) => {
+      torchOk = res.available;
+      syncLight();
+    })
+    .catch(() => {
+      torchOk = false;
+    });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -112,7 +162,7 @@ export async function startNativeAR(
 
   const onTap = async (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
-    if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    if (target?.closest(".ar-exit, .ar-light, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
@@ -156,6 +206,8 @@ export async function startNativeAR(
   } finally {
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
+    overlay.light.removeEventListener("click", onLight);
+    overlay.light.hidden = true;
     overlay.exit.disabled = false;
     trackingListener.remove();
     await CubeAR.removeAllListeners();

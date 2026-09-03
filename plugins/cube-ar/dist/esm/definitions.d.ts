@@ -25,6 +25,14 @@ export interface CubeARPlugin {
     startSession(options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+    torchAvailable(): Promise<{
+        available: boolean;
+    }>;
+    setTorch(options: {
+        on: boolean;
+    }): Promise<{
+        on: boolean;
+    }>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;
     removeAllListeners(): Promise<void>;
