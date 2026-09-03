@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { arAdaptRendererOptions, probeArAdapt } from "./ar-adapt";
 
 /** Edge length of the demo cube in meters (real-world scale in AR). */
 export const CUBE_SIZE = 0.12;
@@ -49,8 +50,12 @@ export function stopPreview(): void {
 
 export function startPreview(container: HTMLElement): void {
   stopPreview();
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const adapt = probeArAdapt();
+  const renderer = new THREE.WebGLRenderer({
+    alpha: true,
+    ...arAdaptRendererOptions(adapt),
+  });
+  renderer.setPixelRatio(adapt.pixelRatio);
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.appendChild(renderer.domElement);
 
@@ -85,7 +90,7 @@ export function startPreview(container: HTMLElement): void {
   }).observe(container);
 
   renderer.setAnimationLoop(() => {
-    cube.rotation.y += 0.004;
+    if (adapt.autoRotate) cube.rotation.y += 0.004;
     controls.update();
     renderer.render(scene, camera);
   });
