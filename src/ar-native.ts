@@ -1,6 +1,9 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { createArCallFlight } from "./ar-call-flight";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
+
+const tapFlight = createArCallFlight("serial");
 import {
   type CompatSnapshot,
   DebugCollector,
@@ -110,26 +113,26 @@ export async function startNativeAR(
     void CubeAR.addListener("sessionEnded", () => resolve());
   });
 
-  const onTap = async (event: PointerEvent) => {
+  const onTap = (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
-    try {
-      const result = await CubeAR.onScreenTap({
-        x: event.clientX * dpr,
-        y: event.clientY * dpr,
-      });
-      if (result.placed) {
-        placed = result.count;
+    void tapFlight
+      .schedule("tap", { x: event.clientX * dpr, y: event.clientY * dpr }, (p) =>
+        CubeAR.onScreenTap(p),
+      )
+      .then((out) => {
+        if (out.status !== "ran" || !out.value.placed) return;
+        placed = out.value.count;
         overlay.count.textContent = String(placed);
         overlay.hint.hidden = true;
         debug.logEvent(`cube placed (#${placed})`);
-      }
-    } catch {
-      debug.logEvent("tap failed");
-    }
+      })
+      .catch(() => {
+        debug.logEvent("tap failed");
+      });
   };
 
   document.addEventListener("pointerdown", onTap);
@@ -154,6 +157,7 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    tapFlight.reset();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
