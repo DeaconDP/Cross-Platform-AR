@@ -40,5 +40,9 @@ export interface CubeARPlugin {
     eventName: "sessionEnded",
     listenerFunc: () => void,
   ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "backPressed",
+    listenerFunc: (event: { sessionRunning?: boolean }) => void,
+  ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

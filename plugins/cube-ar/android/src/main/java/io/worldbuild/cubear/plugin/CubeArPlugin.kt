@@ -67,6 +67,8 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var originalOverScroll = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+    private var overScrollSaved = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -230,6 +232,11 @@ class CubeArPlugin : Plugin() {
 
         webView.setBackgroundColor(Color.TRANSPARENT)
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        if (!overScrollSaved) {
+            originalOverScroll = webView.overScrollMode
+            overScrollSaved = true
+        }
+        webView.overScrollMode = View.OVER_SCROLL_NEVER
 
         var parent: android.view.ViewParent? = webView.parent
         while (parent is View) {
@@ -642,6 +649,10 @@ class CubeArPlugin : Plugin() {
         val webView = bridge.webView
         webView.setBackgroundColor(Color.WHITE)
         webView.setLayerType(View.LAYER_TYPE_NONE, null)
+        if (overScrollSaved) {
+            webView.overScrollMode = originalOverScroll
+            overScrollSaved = false
+        }
     }
 
     private fun parseHexColor(hex: String): Triple<Float, Float, Float> {
@@ -662,6 +673,14 @@ class CubeArPlugin : Plugin() {
 
     private fun notifySessionEnded() {
         notifyListeners("sessionEnded", JSObject())
+    }
+
+    override fun handleOnBackPressed() {
+        if (arSceneView != null) {
+            val ev = JSObject()
+            ev.put("sessionRunning", true)
+            notifyListeners("backPressed", ev)
+        }
     }
 
     override fun handleOnPause() {
