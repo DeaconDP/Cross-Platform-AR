@@ -7,11 +7,15 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.webkit.WebView
+import android.webkit.WebViewRenderProcess
+import android.webkit.WebViewRenderProcessClient
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.Lifecycle
@@ -230,6 +234,7 @@ class CubeArPlugin : Plugin() {
 
         webView.setBackgroundColor(Color.TRANSPARENT)
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        watchWebViewProcess(webView)
 
         var parent: android.view.ViewParent? = webView.parent
         while (parent is View) {
@@ -662,6 +667,32 @@ class CubeArPlugin : Plugin() {
 
     private fun notifySessionEnded() {
         notifyListeners("sessionEnded", JSObject())
+    }
+
+    private fun watchWebViewProcess(webView: WebView) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        try {
+            webView.setWebViewRenderProcessClient(object : WebViewRenderProcessClient() {
+                override fun onRenderProcessUnresponsive(
+                    view: WebView,
+                    renderer: WebViewRenderProcess?,
+                ) {
+                    // OS may recover — do not tear down a live session.
+                }
+
+                override fun onRenderProcessGone(
+                    view: WebView,
+                    renderer: WebViewRenderProcess?,
+                ) {
+                    activity?.runOnUiThread {
+                        detachArView()
+                        notifySessionEnded()
+                    } ?: detachArView()
+                }
+            })
+        } catch (_: Exception) {
+            // older WebView implementations
+        }
     }
 
     override fun handleOnPause() {

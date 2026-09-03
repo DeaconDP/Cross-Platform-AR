@@ -20,6 +20,24 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var appActiveObserver: NSObjectProtocol?
+
+    public override func load() {
+        super.load()
+        appActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.teardownIfOrphaned()
+        }
+    }
+
+    deinit {
+        if let appActiveObserver {
+            NotificationCenter.default.removeObserver(appActiveObserver)
+        }
+    }
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -75,6 +93,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
             let placed = self.placeCube(at: CGPoint(x: CGFloat(x), y: CGFloat(y)), in: view)
             call.resolve(["placed": placed, "count": self.placedCount])
+        }
+    }
+
+    private func teardownIfOrphaned() {
+        guard let view = arView else { return }
+        if view.superview == nil || view.window == nil {
+            detachArView()
         }
     }
 
