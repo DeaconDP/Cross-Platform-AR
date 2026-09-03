@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arClassifyMediaError, arOccupy, arOccupyCoach } from "./ar-occupy";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -34,11 +35,31 @@ export async function startWebXR(
   overlay: OverlayElements,
   snapshot: CompatSnapshot,
 ): Promise<void> {
-  const session = await navigator.xr!.requestSession("immersive-ar", {
-    requiredFeatures: ["hit-test"],
-    optionalFeatures: ["dom-overlay", "plane-detection"],
-    domOverlay: { root: overlay.root },
+  let session: XRSession | undefined;
+  const occupy = arOccupy({
+    onYield: () => {
+      try {
+        void session?.end();
+      } catch {
+        /* already ending */
+      }
+    },
   });
+  try {
+    session = await navigator.xr!.requestSession("immersive-ar", {
+      requiredFeatures: ["hit-test"],
+      optionalFeatures: ["dom-overlay", "plane-detection"],
+      domOverlay: { root: overlay.root },
+    });
+  } catch (err) {
+    occupy.release();
+    throw new Error(arOccupyCoach(arClassifyMediaError(err), "camera"));
+  }
+  const xrSession = session;
+  if (!xrSession) {
+    occupy.release();
+    throw new Error(arOccupyCoach("failed", "camera"));
+  }
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(window.devicePixelRatio);
@@ -61,7 +82,7 @@ export async function startWebXR(
   const reticlePos = new THREE.Vector3();
   const debug = new DebugCollector(overlay.debugPanel, snapshot);
   debug.setSessionMeta({
-    domOverlayActive: session.domOverlayState?.type === "screen",
+    domOverlayActive: xrSession.domOverlayState?.type === "screen",
     hitTestActive: false,
     referenceSpaceType: "local",
   });
@@ -69,14 +90,14 @@ export async function startWebXR(
 
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
-  const unbindSession = debug.bindSession(session);
+  const unbindSession = debug.bindSession(xrSession);
 
   let placed = 0;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
-  session.addEventListener("select", () => {
+  xrSession.addEventListener("select", () => {
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
@@ -88,22 +109,23 @@ export async function startWebXR(
     debug.logEvent(`cube placed (#${placed})`);
   });
 
-  const onExit = () => session.end();
+  const onExit = () => void xrSession.end();
   overlay.exit.addEventListener("click", onExit);
 
-  const viewerSpace = await session.requestReferenceSpace("viewer");
-  const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
+  const viewerSpace = await xrSession.requestReferenceSpace("viewer");
+  const hitTestSource = await xrSession.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    occupy.release();
     unwireDebug();
     unbindSession();
-    await session.end();
+    await xrSession.end();
     renderer.domElement.remove();
     renderer.dispose();
     throw new Error("Hit testing unavailable on this device");
   }
 
   debug.setSessionMeta({
-    domOverlayActive: session.domOverlayState?.type === "screen",
+    domOverlayActive: xrSession.domOverlayState?.type === "screen",
     hitTestActive: true,
     referenceSpaceType: "local",
   });
@@ -135,7 +157,7 @@ export async function startWebXR(
     if (debug.isEnabled()) {
       debug.tick({
         frame,
-        session,
+        session: xrSession,
         renderer,
         scene,
         reticle,
@@ -150,12 +172,13 @@ export async function startWebXR(
     renderer.render(scene, camera);
   });
 
-  await renderer.xr.setSession(session);
+  await renderer.xr.setSession(xrSession);
 
   await new Promise<void>((resolve) => {
-    session.addEventListener("end", () => resolve(), { once: true });
+    xrSession.addEventListener("end", () => resolve(), { once: true });
   });
 
+  occupy.release();
   overlay.exit.removeEventListener("click", onExit);
   unwireDebug();
   unbindSession();

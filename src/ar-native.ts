@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { arClassifyMediaError, arOccupy, arOccupyCoach } from "./ar-occupy";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -20,7 +21,11 @@ export function nativeARErrorMessage(err: unknown): string {
         ? String((err as { message: unknown }).message)
         : String(err);
 
-  if (/camera permission denied/i.test(msg)) {
+  const reason = arClassifyMediaError(err);
+  if (reason === "busy") return arOccupyCoach("busy", "camera");
+  if (reason === "missing") return arOccupyCoach("missing", "camera");
+  if (reason === "insecure") return arOccupyCoach("insecure", "camera");
+  if (reason === "denied" || /camera permission denied/i.test(msg)) {
     return "Camera access is required for AR. Open Settings → Apps → Cube AR → Permissions and allow Camera.";
   }
   if (/arcore install declined/i.test(msg)) {
@@ -82,6 +87,12 @@ export async function startNativeAR(
     referenceSpaceType: "native",
   });
   debug.logEvent("native session start");
+
+  const occupy = arOccupy({
+    onYield: () => {
+      void CubeAR.stopSession().catch(() => undefined);
+    },
+  });
 
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
@@ -154,6 +165,7 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    occupy.release();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
