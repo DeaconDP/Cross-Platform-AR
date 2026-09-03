@@ -664,6 +664,13 @@ class CubeArPlugin : Plugin() {
         notifyListeners("sessionEnded", JSObject())
     }
 
+    private fun emitCameraLost(reason: String, message: String) {
+        val payload = JSObject()
+        payload.put("reason", reason)
+        payload.put("message", message)
+        notifyListeners("cameraLost", payload)
+    }
+
     override fun handleOnPause() {
         super.handleOnPause()
         val registry = arLifecycleOwner?.registry
@@ -682,6 +689,10 @@ class CubeArPlugin : Plugin() {
         super.handleOnResume()
         pendingStartCall?.let { ensureArCoreAndBeginSession(it) }
         val view = arSceneView ?: return
+        if (getPermissionState("camera") != PermissionState.GRANTED) {
+            emitCameraLost("revoked", "Camera access is required for AR. Open Settings → Apps → Cube AR → Permissions and allow Camera.")
+            return
+        }
         val registry = arLifecycleOwner?.registry
         if (registry != null && registry.currentState.isAtLeast(Lifecycle.State.STARTED) &&
             !registry.currentState.isAtLeast(Lifecycle.State.RESUMED)
@@ -690,12 +701,20 @@ class CubeArPlugin : Plugin() {
                 registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
             } catch (ex: Exception) {
                 Logger.error("CubeAR lifecycle resume failed", ex)
+                emitCameraLost("disconnected", "The camera stopped. Check that nothing else is using it, then try again.")
             }
         } else {
             try {
                 view.arCore.resume(activity, null)
             } catch (ex: Exception) {
                 Logger.error("CubeAR resume failed", ex)
+                val msg = ex.message?.lowercase().orEmpty()
+                val reason = when {
+                    msg.contains("permission") || msg.contains("security") || msg.contains("denied") -> "revoked"
+                    msg.contains("in use") || msg.contains("busy") -> "in-use"
+                    else -> "disconnected"
+                }
+                emitCameraLost(reason, "The camera stopped. Check that nothing else is using it, then try again.")
             }
         }
     }
