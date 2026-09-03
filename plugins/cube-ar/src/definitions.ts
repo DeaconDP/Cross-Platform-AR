@@ -7,6 +7,12 @@ export interface CubeARSupportResult {
   backend: CubeARBackend;
 }
 
+export interface CubeARPreflight {
+  permission: "granted" | "prompt" | "denied" | "unknown";
+  available: boolean;
+  installNeeded: boolean;
+}
+
 export interface CubeARSessionOptions {
   cubeSizeM: number;
   colorHex: string;
@@ -29,6 +35,7 @@ export interface CubeARTrackingEvent {
 
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
+  preflight(): Promise<CubeARPreflight>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;

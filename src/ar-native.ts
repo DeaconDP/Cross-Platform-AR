@@ -1,5 +1,10 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import {
+  arBrowserFlags,
+  arDeniedCoach,
+  arJudgePreflight,
+} from "./ar-preflight";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -82,6 +87,37 @@ export async function startNativeAR(
     referenceSpaceType: "native",
   });
   debug.logEvent("native session start");
+
+  try {
+    const snap = await CubeAR.preflight();
+    const flags = arBrowserFlags({
+      isSecureContext: globalThis.isSecureContext,
+      protocol: globalThis.location?.protocol,
+      hostname: globalThis.location?.hostname,
+      innerWidth: globalThis.innerWidth,
+      innerHeight: globalThis.innerHeight,
+    });
+    const verdict = arJudgePreflight({
+      ...flags,
+      insecure: false,
+      permission: snap.permission,
+      available: snap.available,
+      installNeeded: snap.installNeeded,
+    });
+    if (!verdict.ok) {
+      debug.logEvent(`preflight blocked: ${verdict.reason}`);
+      throw new Error(
+        verdict.reason === "denied" ? arDeniedCoach("cube") : verdict.coach,
+      );
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/unimplemented|not implemented/i.test(msg)) {
+      /* older plugin without preflight — start() still gates permission */
+    } else {
+      throw err;
+    }
+  }
 
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);

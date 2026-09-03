@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { arBrowserFlags, arJudgePreflight } from "./ar-preflight";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -34,6 +35,19 @@ export async function startWebXR(
   overlay: OverlayElements,
   snapshot: CompatSnapshot,
 ): Promise<void> {
+  const verdict = arJudgePreflight(
+    arBrowserFlags({
+      isSecureContext: globalThis.isSecureContext,
+      protocol: globalThis.location?.protocol,
+      hostname: globalThis.location?.hostname,
+      innerWidth: globalThis.innerWidth,
+      innerHeight: globalThis.innerHeight,
+    }),
+  );
+  if (!verdict.ok) {
+    throw new Error(verdict.coach);
+  }
+
   const session = await navigator.xr!.requestSession("immersive-ar", {
     requiredFeatures: ["hit-test"],
     optionalFeatures: ["dom-overlay", "plane-detection"],
