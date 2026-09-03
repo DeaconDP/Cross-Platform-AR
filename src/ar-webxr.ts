@@ -1,4 +1,12 @@
+import { Capacitor } from "@capacitor/core";
+import { CubeAR } from "cube-ar";
 import * as THREE from "three";
+import {
+  arApplySafeVars,
+  arArmSafe,
+  arParseNativeInsets,
+  arReadHostInsets,
+} from "./ar-safe";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -102,6 +110,19 @@ export async function startWebXR(
     throw new Error("Hit testing unavailable on this device");
   }
 
+  const safeArm = arArmSafe({
+    readCss: () => arReadHostInsets(overlay.root),
+    readNative: async () => {
+      if (!Capacitor.isNativePlatform()) return null;
+      try {
+        return arParseNativeInsets(await CubeAR.safeInsets());
+      } catch {
+        return null;
+      }
+    },
+    apply: (chrome) => arApplySafeVars(overlay.root, chrome),
+  });
+
   debug.setSessionMeta({
     domOverlayActive: session.domOverlayState?.type === "screen",
     hitTestActive: true,
@@ -157,6 +178,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  safeArm.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

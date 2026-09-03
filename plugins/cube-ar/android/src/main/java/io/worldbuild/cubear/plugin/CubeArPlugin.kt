@@ -193,6 +193,48 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun safeInsets(call: PluginCall) {
+        call.resolve(readSafeInsets())
+    }
+
+    private fun readSafeInsets(): JSObject {
+        val ret = JSObject()
+        ret.put("top", 0.0)
+        ret.put("right", 0.0)
+        ret.put("bottom", 0.0)
+        ret.put("left", 0.0)
+        try {
+            val act = activity ?: return ret
+            val decor = act.window?.decorView ?: return ret
+            val density = act.resources.displayMetrics.density.coerceAtLeast(0.1f)
+            val insets = decor.rootWindowInsets ?: return ret
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                val sys = insets.getInsets(
+                    android.view.WindowInsets.Type.systemBars()
+                        or android.view.WindowInsets.Type.displayCutout()
+                        or android.view.WindowInsets.Type.ime(),
+                )
+                ret.put("top", sys.top / density)
+                ret.put("right", sys.right / density)
+                ret.put("bottom", sys.bottom / density)
+                ret.put("left", sys.left / density)
+            } else {
+                @Suppress("DEPRECATION")
+                ret.put("top", insets.systemWindowInsetTop / density)
+                @Suppress("DEPRECATION")
+                ret.put("right", insets.systemWindowInsetRight / density)
+                @Suppress("DEPRECATION")
+                ret.put("bottom", insets.systemWindowInsetBottom / density)
+                @Suppress("DEPRECATION")
+                ret.put("left", insets.systemWindowInsetLeft / density)
+            }
+        } catch (_: Exception) {
+            /* keep zeros */
+        }
+        return ret
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")

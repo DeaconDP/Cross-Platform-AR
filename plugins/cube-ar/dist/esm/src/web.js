@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async safeInsets() {
+        return { top: 0, right: 0, bottom: 0, left: 0 };
+    }
 }
