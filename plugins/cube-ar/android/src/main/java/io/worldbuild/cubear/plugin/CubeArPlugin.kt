@@ -78,7 +78,16 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+        private const val SURFACE_HINT_MS = 8_000L
+        private const val SURFACE_SLOW_MS = 16_000L
+        private const val IDLE_UNPLACED_MS = 45_000L
+        private const val IDLE_PLACED_MS = 90_000L
     }
+
+    private var sessionStartedMs = 0L
+    private var lastInteractMs = 0L
+    private var surfaceWaitLevel = 0
+    private var idleClosed = false
 
     @PluginMethod
     fun isSupported(call: PluginCall) {
@@ -98,6 +107,11 @@ class CubeArPlugin : Plugin() {
         cubeColorHex = color
         placedCount = 0
         surfaceFound = false
+        val now = System.currentTimeMillis()
+        sessionStartedMs = now
+        lastInteractMs = now
+        surfaceWaitLevel = 0
+        idleClosed = false
 
         if (getPermissionState("camera") == PermissionState.GRANTED) {
             ensureArCoreAndBeginSession(call)
@@ -194,6 +208,7 @@ class CubeArPlugin : Plugin() {
 
     @PluginMethod
     fun onScreenTap(call: PluginCall) {
+        lastInteractMs = System.currentTimeMillis()
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")
             return
@@ -309,6 +324,7 @@ class CubeArPlugin : Plugin() {
                     sessionFrameReceived = true
                     cancelSessionWatchdog()
                 }
+                tickIdleAndSurface()
                 val tracking = frame.camera.trackingState
                 updateReticle(sceneView, frame)
                 when (tracking) {
@@ -651,6 +667,37 @@ class CubeArPlugin : Plugin() {
         val g = ((value shr 8) and 0xFF) / 255f
         val b = (value and 0xFF) / 255f
         return Triple(r, g, b)
+    }
+
+    private fun tickIdleAndSurface() {
+        if (arSceneView == null || idleClosed) return
+        val now = System.currentTimeMillis()
+        if (!surfaceFound) {
+            val wait = now - sessionStartedMs
+            if (wait >= SURFACE_SLOW_MS && surfaceWaitLevel < 2) {
+                surfaceWaitLevel = 2
+                val data = JSObject()
+                data.put("level", "slow")
+                data.put("waitedMs", wait)
+                notifyListeners("surfaceWait", data)
+            } else if (wait >= SURFACE_HINT_MS && surfaceWaitLevel < 1) {
+                surfaceWaitLevel = 1
+                val data = JSObject()
+                data.put("level", "hint")
+                data.put("waitedMs", wait)
+                notifyListeners("surfaceWait", data)
+            }
+        }
+        val limit = if (placedCount > 0) IDLE_PLACED_MS else IDLE_UNPLACED_MS
+        if (now - lastInteractMs >= limit) {
+            idleClosed = true
+            val data = JSObject()
+            data.put("reason", "idle")
+            data.put("message", "AR closed after a pause — open it again when you’re ready.")
+            notifyListeners("idleClosed", data)
+            detachArView()
+            notifySessionEnded()
+        }
     }
 
     private fun notifyTracking(state: String, message: String? = null) {

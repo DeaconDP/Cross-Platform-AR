@@ -20,6 +20,11 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var sessionStartedAt = Date()
+    private var lastInteractAt = Date()
+    private var surfaceWaitLevel = 0
+    private var idleClosed = false
+    private var idleTimer: Timer?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -39,11 +44,16 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         cubeColorHex = call.getString("colorHex") ?? "#30d158"
         placedCount = 0
         surfaceFound = false
+        sessionStartedAt = Date()
+        lastInteractAt = Date()
+        surfaceWaitLevel = 0
+        idleClosed = false
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.markSessionFresh()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -62,6 +72,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
+        lastInteractAt = Date()
         guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
             call.reject("Missing tap coordinates")
             return
@@ -119,7 +130,45 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func markSessionFresh() {
+        sessionStartedAt = Date()
+        lastInteractAt = Date()
+        surfaceWaitLevel = 0
+        idleClosed = false
+        idleTimer?.invalidate()
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.tickIdleAndSurface()
+        }
+    }
+
+    private func tickIdleAndSurface() {
+        guard arView != nil, !idleClosed else { return }
+        let now = Date()
+        if !surfaceFound {
+            let wait = now.timeIntervalSince(sessionStartedAt) * 1000
+            if wait >= 16_000 && surfaceWaitLevel < 2 {
+                surfaceWaitLevel = 2
+                notifyListeners("surfaceWait", data: ["level": "slow", "waitedMs": wait])
+            } else if wait >= 8_000 && surfaceWaitLevel < 1 {
+                surfaceWaitLevel = 1
+                notifyListeners("surfaceWait", data: ["level": "hint", "waitedMs": wait])
+            }
+        }
+        let limit = placedCount > 0 ? 90.0 : 45.0
+        if now.timeIntervalSince(lastInteractAt) >= limit {
+            idleClosed = true
+            notifyListeners("idleClosed", data: [
+                "reason": "idle",
+                "message": "AR closed after a pause — open it again when you’re ready."
+            ])
+            detachArView()
+            notifyListeners("sessionEnded", data: [:])
+        }
+    }
+
     private func detachArView() {
+        idleTimer?.invalidate()
+        idleTimer = nil
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
