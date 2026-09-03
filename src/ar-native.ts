@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { isDocumentHidden, whenArHostReady } from "./ar-host-ready";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -146,6 +147,13 @@ export async function startNativeAR(
 
   try {
     stopPreview();
+    await whenArHostReady(
+      () => ({
+        width: overlay.root.clientWidth || document.documentElement.clientWidth,
+        height: overlay.root.clientHeight || document.documentElement.clientHeight,
+      }),
+      { isHidden: isDocumentHidden },
+    );
     await CubeAR.startSession({
       cubeSizeM: CUBE_SIZE,
       colorHex: CUBE_COLOR_HEX,
