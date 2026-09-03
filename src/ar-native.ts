@@ -1,5 +1,13 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import {
+  nativeSticky,
+  parseStartPhase,
+  PROBE_BUDGET_MS,
+  PROBE_MESSAGE,
+  runStartWatch,
+  withBudget,
+} from "./ar-start-phase";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -38,6 +46,9 @@ export function nativeARErrorMessage(err: unknown): string {
   if (/camera session timed out/i.test(msg)) {
     return "Native AR couldn't start the camera. Force-stop the app and try again.";
   }
+  if (/stalled|skipped after a recent stall/i.test(msg)) {
+    return "Native AR stalled starting the camera. Try WebXR, or wait a moment and try native again.";
+  }
   if (/^Failed to start native AR:/i.test(msg) || /^Failed to prepare ARCore:/i.test(msg)) {
     const detail = msg.replace(/^Failed to (start native AR|prepare ARCore):\s*/i, "").trim();
     if (detail && detail.toLowerCase() !== "null") return detail;
@@ -53,11 +64,15 @@ export async function isNativeARSupported(): Promise<{
   supported: boolean;
   backend: "arkit" | "arcore" | "none";
 }> {
-  if (!Capacitor.isNativePlatform()) {
+  if (!Capacitor.isNativePlatform() || nativeSticky.shouldSkip(Date.now())) {
     return { supported: false, backend: "none" };
   }
   try {
-    const result = await CubeAR.isSupported();
+    const result = await withBudget(
+      CubeAR.isSupported(),
+      PROBE_BUDGET_MS,
+      PROBE_MESSAGE,
+    );
     return { supported: result.supported, backend: result.backend };
   } catch {
     return { supported: false, backend: "none" };
@@ -146,9 +161,21 @@ export async function startNativeAR(
 
   try {
     stopPreview();
-    await CubeAR.startSession({
-      cubeSizeM: CUBE_SIZE,
-      colorHex: CUBE_COLOR_HEX,
+    await runStartWatch({
+      sticky: nativeSticky,
+      start: () =>
+        CubeAR.startSession({
+          cubeSizeM: CUBE_SIZE,
+          colorHex: CUBE_COLOR_HEX,
+        }),
+      stop: () => CubeAR.stopSession().catch(() => undefined),
+      onPhase: async (cb) => {
+        const handle = await CubeAR.addListener("startPhase", (event) => {
+          const phase = parseStartPhase(event);
+          if (phase) cb(phase);
+        });
+        return () => handle.remove();
+      },
     });
     document.body.classList.add("ar-native-active");
     overlay.root.hidden = false;

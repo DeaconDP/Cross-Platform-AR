@@ -20,6 +20,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var startGeneration = 0
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -27,6 +28,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             "supported": supported,
             "backend": supported ? "arkit" : "none",
         ])
+    }
+
+    private func emitStartPhase(_ phase: String) {
+        notifyListeners("startPhase", data: ["phase": phase])
     }
 
     @objc func startSession(_ call: CAPPluginCall) {
@@ -39,11 +44,17 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         cubeColorHex = call.getString("colorHex") ?? "#30d158"
         placedCount = 0
         surfaceFound = false
+        let gen = startGeneration
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            guard gen == self.startGeneration else {
+                call.reject("AR start cancelled.")
+                return
+            }
             do {
                 try self.attachArView()
+                self.emitStartPhase("camera")
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -120,6 +131,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        startGeneration += 1
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
