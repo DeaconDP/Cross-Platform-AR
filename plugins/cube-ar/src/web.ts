@@ -20,6 +20,14 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
     // no-op
   }
 
+  async mixAudio(options?: { policy?: "mix" | "duck" }) {
+    return { ok: true, policy: options?.policy === "duck" ? "duck" : "mix" };
+  }
+
+  async restoreAudio(): Promise<void> {
+    // no-op
+  }
+
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
   }

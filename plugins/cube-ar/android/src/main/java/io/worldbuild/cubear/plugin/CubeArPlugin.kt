@@ -2,6 +2,10 @@ package io.worldbuild.cubear.plugin
 
 import android.Manifest
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.os.Build
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -67,6 +71,9 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var audioMixed = false
+    private var audioManager: AudioManager? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +155,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        applyAudioMix("mix")
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -180,6 +188,26 @@ class CubeArPlugin : Plugin() {
             depth++
         }
         return parts.joinToString(" ← ")
+    }
+
+    @PluginMethod
+    fun mixAudio(call: PluginCall) {
+        val policy = if (call.getString("policy") == "duck") "duck" else "mix"
+        bridge.executeOnMainThread {
+            applyAudioMix(policy)
+            val result = JSObject()
+            result.put("ok", true)
+            result.put("policy", policy)
+            call.resolve(result)
+        }
+    }
+
+    @PluginMethod
+    fun restoreAudio(call: PluginCall) {
+        bridge.executeOnMainThread {
+            restoreAudioMix()
+            call.resolve()
+        }
     }
 
     @PluginMethod
@@ -625,7 +653,59 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun applyAudioMix(policy: String) {
+        if (policy == "duck") {
+            if (audioManager == null) {
+                audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            }
+            restoreAudioFocusOnly()
+            val manager = audioManager
+            if (manager != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val attrs = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+                audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                    .setAudioAttributes(attrs)
+                    .build()
+                    .also { manager.requestAudioFocus(it) }
+            } else {
+                @Suppress("DEPRECATION")
+                manager?.requestAudioFocus(
+                    null,
+                    AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+                )
+            }
+        } else {
+            restoreAudioFocusOnly()
+        }
+        audioMixed = true
+    }
+
+    private fun restoreAudioFocusOnly() {
+        val manager = audioManager ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                audioFocusRequest?.let { manager.abandonAudioFocusRequest(it) }
+                audioFocusRequest = null
+            } else {
+                @Suppress("DEPRECATION")
+                manager.abandonAudioFocus(null)
+            }
+        } catch (_: Exception) {
+            /* already abandoned */
+        }
+    }
+
+    private fun restoreAudioMix() {
+        if (!audioMixed) return
+        restoreAudioFocusOnly()
+        audioMixed = false
+    }
+
     private fun detachArView() {
+        restoreAudioMix()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

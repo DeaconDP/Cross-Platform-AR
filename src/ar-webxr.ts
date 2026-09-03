@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arArmAudio } from "./ar-audio";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -152,9 +153,11 @@ export async function startWebXR(
 
   await renderer.xr.setSession(session);
 
+  const audio = arArmAudio();
   await new Promise<void>((resolve) => {
     session.addEventListener("end", () => resolve(), { once: true });
   });
+  audio.dispose();
 
   overlay.exit.removeEventListener("click", onExit);
   unwireDebug();

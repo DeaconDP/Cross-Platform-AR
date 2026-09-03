@@ -24,6 +24,13 @@ export interface CubeARPlugin {
     isSupported(): Promise<CubeARSupportResult>;
     startSession(options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
+    mixAudio(options?: {
+        policy?: "mix" | "duck";
+    }): Promise<{
+        ok: boolean;
+        policy: "mix" | "duck";
+    }>;
+    restoreAudio(): Promise<void>;
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;

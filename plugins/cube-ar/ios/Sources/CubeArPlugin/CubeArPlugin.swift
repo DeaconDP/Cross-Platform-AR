@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import Capacitor
 import SceneKit
 import UIKit
@@ -12,6 +13,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "mixAudio", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "restoreAudio", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +23,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var audioMixed = false
+    private var previousAudioCategory: AVAudioSession.Category?
+    private var previousAudioMode: AVAudioSession.Mode?
+    private var previousAudioOptions: AVAudioSession.CategoryOptions?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,12 +51,28 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.applyAudioMix(policy: "mix")
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
                 self.detachArView()
                 call.reject("Failed to start native AR: \(error.localizedDescription)")
             }
+        }
+    }
+
+    @objc func mixAudio(_ call: CAPPluginCall) {
+        let policy = call.getString("policy") == "duck" ? "duck" : "mix"
+        DispatchQueue.main.async {
+            self.applyAudioMix(policy: policy)
+            call.resolve(["ok": true, "policy": policy])
+        }
+    }
+
+    @objc func restoreAudio(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.restoreAudioMix()
+            call.resolve()
         }
     }
 
@@ -119,7 +142,41 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func applyAudioMix(policy: String) {
+        let session = AVAudioSession.sharedInstance()
+        if !audioMixed {
+            previousAudioCategory = session.category
+            previousAudioMode = session.mode
+            previousAudioOptions = session.categoryOptions
+        }
+        let options: AVAudioSession.CategoryOptions = policy == "duck" ? [.duckOthers] : [.mixWithOthers]
+        do {
+            try session.setCategory(.ambient, mode: .default, options: options)
+            try session.setActive(true)
+            audioMixed = true
+        } catch {
+            /* camera still starts */
+        }
+    }
+
+    private func restoreAudioMix() {
+        guard audioMixed else { return }
+        let session = AVAudioSession.sharedInstance()
+        do {
+            if let cat = previousAudioCategory {
+                try session.setCategory(cat, mode: previousAudioMode ?? .default, options: previousAudioOptions ?? [])
+            }
+        } catch {
+            /* leave the session as-is */
+        }
+        audioMixed = false
+        previousAudioCategory = nil
+        previousAudioMode = nil
+        previousAudioOptions = nil
+    }
+
     private func detachArView() {
+        restoreAudioMix()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

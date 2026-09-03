@@ -9,6 +9,12 @@ export class CubeARWeb extends WebPlugin {
     async stopSession() {
         // no-op
     }
+    async mixAudio(options) {
+        return { ok: true, policy: (options?.policy === "duck") ? "duck" : "mix" };
+    }
+    async restoreAudio() {
+        // no-op
+    }
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
