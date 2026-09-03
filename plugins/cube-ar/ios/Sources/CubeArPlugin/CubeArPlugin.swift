@@ -87,8 +87,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         webView.isOpaque = false
         webView.backgroundColor = .clear
+        webView.superview?.layoutIfNeeded()
 
-        let view = ARSCNView(frame: webView.bounds)
+        var frame = webView.bounds
+        if frame.width < 8 || frame.height < 8, let parent = webView.superview {
+            frame = parent.bounds
+        }
+        let view = ARSCNView(frame: frame)
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.delegate = self
         view.session.delegate = self
