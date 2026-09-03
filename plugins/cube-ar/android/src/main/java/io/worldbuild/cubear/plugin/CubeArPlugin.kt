@@ -67,6 +67,7 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var sessionSeq = 0
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -98,6 +99,8 @@ class CubeArPlugin : Plugin() {
         cubeColorHex = color
         placedCount = 0
         surfaceFound = false
+        val requested = call.getString("sessionId")
+        sessionSeq = requested?.toIntOrNull()?.takeIf { it > 0 } ?: (sessionSeq + 1)
 
         if (getPermissionState("camera") == PermissionState.GRANTED) {
             ensureArCoreAndBeginSession(call)
@@ -149,7 +152,9 @@ class CubeArPlugin : Plugin() {
                 attachArView(
                     onReady = {
                         notifyTracking("initializing", "Starting ARCore session")
-                        call.resolve()
+                        val started = JSObject()
+                        started.put("sessionId", sessionSeq.toString())
+                        call.resolve(started)
                     },
                     onFailed = { ex ->
                         Logger.error("CubeAR attach failed", ex)
@@ -656,12 +661,15 @@ class CubeArPlugin : Plugin() {
     private fun notifyTracking(state: String, message: String? = null) {
         val payload = JSObject()
         payload.put("state", state)
+        payload.put("sessionId", sessionSeq.toString())
         if (message != null) payload.put("message", message)
         notifyListeners("trackingChanged", payload)
     }
 
     private fun notifySessionEnded() {
-        notifyListeners("sessionEnded", JSObject())
+        val payload = JSObject()
+        payload.put("sessionId", sessionSeq.toString())
+        notifyListeners("sessionEnded", payload)
     }
 
     override fun handleOnPause() {

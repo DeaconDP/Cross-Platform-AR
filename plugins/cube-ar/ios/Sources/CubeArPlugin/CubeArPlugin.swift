@@ -20,6 +20,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var sessionSeq: Int = 0
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -39,13 +40,18 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         cubeColorHex = call.getString("colorHex") ?? "#30d158"
         placedCount = 0
         surfaceFound = false
+        if let requested = call.getString("sessionId"), let parsed = Int(requested), parsed > 0 {
+            sessionSeq = parsed
+        } else {
+            sessionSeq += 1
+        }
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             do {
                 try self.attachArView()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
-                call.resolve()
+                call.resolve(["sessionId": String(self.sessionSeq)])
             } catch {
                 self.detachArView()
                 call.reject("Failed to start native AR: \(error.localizedDescription)")
@@ -56,7 +62,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func stopSession(_ call: CAPPluginCall) {
         DispatchQueue.main.async { [weak self] in
             self?.detachArView()
-            self?.notifyListeners("sessionEnded", data: [:])
+            self?.notifyListeners("sessionEnded", data: ["sessionId": String(self?.sessionSeq ?? 0)])
             call.resolve()
         }
     }
@@ -179,7 +185,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func notifyTracking(state: String, message: String? = nil) {
-        var data: [String: Any] = ["state": state]
+        var data: [String: Any] = [
+            "state": state,
+            "sessionId": String(sessionSeq),
+        ]
         if let message = message {
             data["message"] = message
         }

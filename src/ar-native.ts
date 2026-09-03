@@ -1,6 +1,14 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import {
+  createArAvailabilityMemo,
+  createArSessionEpoch,
+  whenDocumentVisible,
+} from "./ar-session-guard";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
+
+const arEpoch = createArSessionEpoch();
+const arAvail = createArAvailabilityMemo();
 import {
   type CompatSnapshot,
   DebugCollector,
@@ -57,9 +65,10 @@ export async function isNativeARSupported(): Promise<{
     return { supported: false, backend: "none" };
   }
   try {
-    const result = await CubeAR.isSupported();
+    const result = await arAvail.probe(() => CubeAR.isSupported());
     return { supported: result.supported, backend: result.backend };
   } catch {
+    arAvail.invalidate();
     return { supported: false, backend: "none" };
   }
 }
@@ -91,7 +100,10 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const token = arEpoch.begin();
+  arEpoch.bind(token, token);
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
+    if (!arEpoch.accept(token, event)) return;
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
       overlay.hint.textContent = event.message;
@@ -146,9 +158,14 @@ export async function startNativeAR(
 
   try {
     stopPreview();
+    await whenDocumentVisible();
+    if (!arEpoch.isCurrent(token)) {
+      throw new Error("Native AR start cancelled.");
+    }
     await CubeAR.startSession({
       cubeSizeM: CUBE_SIZE,
       colorHex: CUBE_COLOR_HEX,
+      sessionId: String(token),
     });
     document.body.classList.add("ar-native-active");
     overlay.root.hidden = false;
@@ -157,6 +174,7 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    arEpoch.end(token);
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
