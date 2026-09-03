@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { arAdaptRendererOptions, probeArAdapt } from "./ar-adapt";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -40,8 +41,12 @@ export async function startWebXR(
     domOverlay: { root: overlay.root },
   });
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(window.devicePixelRatio);
+  const adapt = probeArAdapt();
+  const renderer = new THREE.WebGLRenderer({
+    alpha: true,
+    ...arAdaptRendererOptions(adapt),
+  });
+  renderer.setPixelRatio(adapt.pixelRatio);
   renderer.xr.enabled = true;
   renderer.xr.setReferenceSpaceType("local");
   document.body.appendChild(renderer.domElement);
