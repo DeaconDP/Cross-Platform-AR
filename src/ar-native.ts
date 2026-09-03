@@ -1,5 +1,11 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import {
+  arCameraLossCopy,
+  arClassifyCameraLoss,
+  arQueryCameraPermission,
+  arWatchCameraLost,
+} from "./ar-lost";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -91,6 +97,15 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  let leaving = false;
+  const leaveForLoss = (message: string) => {
+    if (leaving) return;
+    leaving = true;
+    overlay.hint.hidden = false;
+    overlay.hint.textContent = message;
+    void CubeAR.stopSession();
+  };
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
@@ -104,6 +119,16 @@ export async function startNativeAR(
         backend: snapshot.platform === "ios" ? "arkit" : "arcore",
       });
     }
+  });
+
+  const lostListener = await CubeAR.addListener("cameraLost", (event) => {
+    leaveForLoss(arCameraLossCopy(arClassifyCameraLoss(event), "cube"));
+  });
+
+  const perm = await arQueryCameraPermission();
+  const watch = arWatchCameraLost({
+    permission: perm,
+    onLost: (kind) => leaveForLoss(arCameraLossCopy(kind, "cube")),
   });
 
   const sessionEnded = new Promise<void>((resolve) => {
@@ -136,6 +161,7 @@ export async function startNativeAR(
 
   const onExit = async () => {
     overlay.exit.disabled = true;
+    watch.markUserEnd();
     try {
       await CubeAR.stopSession();
     } catch {
@@ -157,7 +183,9 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    watch.release();
     trackingListener.remove();
+    lostListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();

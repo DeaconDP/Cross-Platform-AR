@@ -40,5 +40,9 @@ export interface CubeARPlugin {
     eventName: "sessionEnded",
     listenerFunc: () => void,
   ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "cameraLost",
+    listenerFunc: (event: { reason?: string; message?: string }) => void,
+  ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

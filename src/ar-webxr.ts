@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { arCameraLossCopy, arWatchSessionEnd } from "./ar-lost";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -88,12 +89,23 @@ export async function startWebXR(
     debug.logEvent(`cube placed (#${placed})`);
   });
 
-  const onExit = () => session.end();
+  const sessionWatch = arWatchSessionEnd(session, (kind) => {
+    overlay.hint.hidden = false;
+    overlay.hint.textContent = arCameraLossCopy(kind, "cube");
+  });
+
+  const onExit = () => {
+    sessionWatch.markUserEnd();
+    void session.end();
+  };
   overlay.exit.addEventListener("click", onExit);
 
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    sessionWatch.markUserEnd();
+    sessionWatch.release();
+    overlay.exit.removeEventListener("click", onExit);
     unwireDebug();
     unbindSession();
     await session.end();
@@ -157,6 +169,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  sessionWatch.release();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

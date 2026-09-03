@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import Capacitor
 import SceneKit
 import UIKit
@@ -178,6 +179,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    private func emitCameraLost(reason: String, message: String) {
+        notifyListeners("cameraLost", data: ["reason": reason, "message": message])
+    }
+
     private func notifyTracking(state: String, message: String? = nil) {
         var data: [String: Any] = ["state": state]
         if let message = message {
@@ -192,6 +197,33 @@ extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
         guard let view = arView, let frame = view.session.currentFrame else { return }
         DispatchQueue.main.async { [weak self] in
             self?.updateReticle(in: view, frame: frame)
+        }
+    }
+
+    public func session(_ session: ARSession, didFailWithError error: Error) {
+        if let ar = error as? ARError {
+            switch ar.code {
+            case .cameraUnauthorized:
+                emitCameraLost(reason: "revoked", message: "Camera access is required for AR. Open Settings → Apps → Cube AR → Permissions and allow Camera.")
+                return
+            case .sensorFailed:
+                emitCameraLost(reason: "disconnected", message: "The camera stopped. Check that nothing else is using it, then try again.")
+                return
+            default:
+                break
+            }
+        }
+        let lower = error.localizedDescription.lowercased()
+        if lower.contains("permission") || lower.contains("denied") || lower.contains("unauthorized") {
+            emitCameraLost(reason: "revoked", message: "Camera access is required for AR. Open Settings → Apps → Cube AR → Permissions and allow Camera.")
+            return
+        }
+        emitCameraLost(reason: "disconnected", message: "The camera stopped. Check that nothing else is using it, then try again.")
+    }
+
+    public func sessionWasInterrupted(_ session: ARSession) {
+        if AVCaptureDevice.authorizationStatus(for: .video) != .authorized {
+            emitCameraLost(reason: "revoked", message: "Camera access is required for AR. Open Settings → Apps → Cube AR → Permissions and allow Camera.")
         }
     }
 
