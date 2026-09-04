@@ -3,12 +3,14 @@ package io.worldbuild.cubear.plugin
 import android.Manifest
 import android.content.Context
 import android.graphics.Color
+import android.media.AudioManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +69,15 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var phoneTick: Runnable? = null
+    private var audioManager: AudioManager? = null
+    private var phoneSupported = true
+    private var phoneRinging = false
+    private var phoneInCall = false
+    private var phoneInterrupted = false
+    private var phoneReason = "unknown"
+    private var lastPhoneKind = "ok"
+    private var phoneActiveSince = 0L
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +159,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startPhoneWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -183,6 +195,13 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun phoneState(call: PluginCall) {
+        startPhoneWatch()
+        applyAudioMode()
+        call.resolve(phonePayload())
+    }
+
+    @PluginMethod
     fun stopSession(call: PluginCall) {
         pendingStartCall = null
         bridge.executeOnMainThread {
@@ -204,6 +223,14 @@ class CubeArPlugin : Plugin() {
         }
 
         bridge.executeOnMainThread {
+            if (phoneBusy()) {
+                val result = JSObject()
+                result.put("placed", false)
+                result.put("count", placedCount)
+                result.put("interrupted", true)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
             val view = arSceneView
             if (view == null) {
                 val result = JSObject()
@@ -625,7 +652,84 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun startPhoneWatch() {
+        if (phoneTick != null) return
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        if (am == null) {
+            phoneSupported = false
+            return
+        }
+        audioManager = am
+        val tick = object : Runnable {
+            override fun run() {
+                applyAudioMode()
+                if (phoneTick != null) {
+                    mainHandler.postDelayed(this, 400)
+                }
+            }
+        }
+        phoneTick = tick
+        applyAudioMode()
+        mainHandler.postDelayed(tick, 400)
+    }
+
+    private fun applyAudioMode() {
+        val am = audioManager ?: return
+        val mode = am.mode
+        phoneRinging = mode == AudioManager.MODE_RINGTONE
+        phoneInCall =
+            mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION
+        if (phoneRinging || phoneInCall) phoneReason = "call"
+        maybeEmitPhone()
+        if (judgePhone() == "active" && arSceneView != null) {
+            if (phoneActiveSince == 0L) {
+                phoneActiveSince = SystemClock.uptimeMillis()
+            } else if (SystemClock.uptimeMillis() - phoneActiveSince >= 800) {
+                detachArView()
+                notifySessionEnded()
+            }
+        } else {
+            phoneActiveSince = 0L
+        }
+    }
+
+    private fun stopPhoneWatch() {
+        phoneTick?.let { mainHandler.removeCallbacks(it) }
+        phoneTick = null
+        lastPhoneKind = "ok"
+        phoneActiveSince = 0L
+    }
+
+    private fun phonePayload(): JSObject {
+        val ret = JSObject()
+        ret.put("supported", phoneSupported)
+        ret.put("ringing", phoneRinging)
+        ret.put("inCall", phoneInCall)
+        ret.put("interrupted", phoneInterrupted)
+        ret.put("reason", phoneReason)
+        return ret
+    }
+
+    private fun judgePhone(): String {
+        if (!phoneSupported) return "ok"
+        if (phoneInCall || phoneInterrupted) return "active"
+        if (phoneRinging) return "ringing"
+        return "ok"
+    }
+
+    private fun phoneBusy(): Boolean = judgePhone() != "ok"
+
+    private fun maybeEmitPhone() {
+        val kind = judgePhone()
+        if (kind == lastPhoneKind) return
+        lastPhoneKind = kind
+        val ret = phonePayload()
+        ret.put("kind", kind)
+        notifyListeners("phoneChanged", ret)
+    }
+
     private fun detachArView() {
+        stopPhoneWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

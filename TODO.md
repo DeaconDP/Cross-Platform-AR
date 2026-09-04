@@ -1,5 +1,6 @@
 # TODO
 
+- [x] Pause cube place when a call / Siri / alarm is active (`src/ar-phone.ts`, native `phoneState`)
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)

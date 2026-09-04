@@ -20,6 +20,17 @@ export interface CubeARTapOptions {
 export interface CubeARTapResult {
   placed: boolean;
   count: number;
+  interrupted?: boolean;
+}
+
+export interface CubeARPhoneState {
+  supported?: boolean;
+  ringing?: boolean;
+  inCall?: boolean;
+  interrupted?: boolean;
+  reason?: "call" | "alarm" | "siri" | "focus" | "unknown";
+  kind?: string;
+  message?: string;
 }
 
 export interface CubeARTrackingEvent {
@@ -32,6 +43,7 @@ export interface CubeARPlugin {
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  phoneState(): Promise<CubeARPhoneState>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +51,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "phoneChanged",
+    listenerFunc: (event: CubeARPhoneState) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }
