@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { armArCast } from "./ar-cast";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -132,6 +133,26 @@ export async function startNativeAR(
     }
   };
 
+  const castHandle = armArCast({
+    product: "cubes",
+    onKind: (_kind, coach) => {
+      if (placed > 0) return;
+      if (coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+      }
+    },
+    native: {
+      castState: () => CubeAR.castState(),
+      listen: async (cb) => {
+        const h = await CubeAR.addListener("castChanged", cb);
+        return () => {
+          void h.remove();
+        };
+      },
+    },
+  });
+
   document.addEventListener("pointerdown", onTap);
 
   const onExit = async () => {
@@ -156,6 +177,7 @@ export async function startNativeAR(
   } finally {
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
+    castHandle.dispose();
     overlay.exit.disabled = false;
     trackingListener.remove();
     await CubeAR.removeAllListeners();

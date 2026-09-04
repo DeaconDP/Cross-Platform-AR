@@ -7,8 +7,10 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.Looper
+import android.view.Display
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +69,9 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var displayManager: DisplayManager? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
+    private var castWatching = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -190,6 +195,11 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun castState(call: PluginCall) {
+        call.resolve(castPayload())
     }
 
     @PluginMethod
@@ -353,6 +363,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        startCastWatch()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -625,7 +636,76 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun castPayload(): JSObject {
+        val result = JSObject()
+        var extra = 0
+        var wireless = false
+        try {
+            val dm = displayManager
+                ?: (context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)
+            if (dm != null) {
+                val displays = dm.displays
+                extra = max(0, displays.size - 1)
+                for (d in displays) {
+                    if ((d.flags and Display.FLAG_PRESENTATION) != 0) wireless = true
+                    val name = d.name?.lowercase() ?: ""
+                    if (
+                        name.contains("wifi") ||
+                        name.contains("cast") ||
+                        name.contains("virtual") ||
+                        name.contains("overlay")
+                    ) {
+                        wireless = true
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // stay conservative
+        }
+        result.put("captured", false)
+        result.put("extraDisplays", extra)
+        result.put("wireless", wireless)
+        return result
+    }
+
+    private fun startCastWatch() {
+        if (castWatching) return
+        val dm = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager ?: return
+        displayManager = dm
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) {
+                notifyListeners("castChanged", castPayload())
+            }
+            override fun onDisplayRemoved(displayId: Int) {
+                notifyListeners("castChanged", castPayload())
+            }
+            override fun onDisplayChanged(displayId: Int) {
+                notifyListeners("castChanged", castPayload())
+            }
+        }
+        displayListener = listener
+        dm.registerDisplayListener(listener, mainHandler)
+        castWatching = true
+        notifyListeners("castChanged", castPayload())
+    }
+
+    private fun stopCastWatch() {
+        if (!castWatching) return
+        val listener = displayListener
+        if (listener != null) {
+            try {
+                displayManager?.unregisterDisplayListener(listener)
+            } catch (_: Exception) {
+                // already gone
+            }
+        }
+        displayListener = null
+        displayManager = null
+        castWatching = false
+    }
+
     private fun detachArView() {
+        stopCastWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

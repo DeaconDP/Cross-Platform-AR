@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "castState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var castWatching = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -58,6 +60,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.detachArView()
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
+        }
+    }
+
+    @objc func castState(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            call.resolve(self.castPayload())
         }
     }
 
@@ -107,6 +115,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startCastWatch()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -119,7 +128,40 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func castPayload() -> [String: Any] {
+        let captured = UIScreen.main.isCaptured
+        let extra = max(0, UIScreen.screens.count - 1)
+        return [
+            "captured": captured,
+            "extraDisplays": extra,
+            "wireless": extra > 0,
+        ]
+    }
+
+    private func startCastWatch() {
+        guard !castWatching else { return }
+        castWatching = true
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(onCastChanged), name: UIScreen.capturedDidChangeNotification, object: nil)
+        nc.addObserver(self, selector: #selector(onCastChanged), name: UIScreen.didConnectNotification, object: nil)
+        nc.addObserver(self, selector: #selector(onCastChanged), name: UIScreen.didDisconnectNotification, object: nil)
+    }
+
+    @objc private func onCastChanged() {
+        notifyListeners("castChanged", data: castPayload())
+    }
+
+    private func stopCastWatch() {
+        guard castWatching else { return }
+        castWatching = false
+        let nc = NotificationCenter.default
+        nc.removeObserver(self, name: UIScreen.capturedDidChangeNotification, object: nil)
+        nc.removeObserver(self, name: UIScreen.didConnectNotification, object: nil)
+        nc.removeObserver(self, name: UIScreen.didDisconnectNotification, object: nil)
+    }
+
     private func detachArView() {
+        stopCastWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
