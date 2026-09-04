@@ -27,11 +27,22 @@ export interface CubeARTrackingEvent {
   message?: string;
 }
 
+export interface CubeARPocketState {
+  near: boolean;
+  distanceCm?: number | null;
+  accelY?: number | null;
+  accelZ?: number | null;
+  facedown: boolean;
+  upright?: boolean;
+  osBlanksOnNear?: boolean;
+}
+
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  proximityState(): Promise<CubeARPocketState>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +50,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "pocketed",
+    listenerFunc: (event: { message?: string; kind?: string }) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

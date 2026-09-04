@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { createCube, createLights } from "./scene";
+import { arArmPocket, arListenPocketSensors } from "./ar-pocket";
 import {
   type CompatSnapshot,
   DebugCollector,
@@ -152,10 +153,28 @@ export async function startWebXR(
 
   await renderer.xr.setSession(session);
 
+  const arm = arArmPocket({
+    product: "cubes",
+    onKind: (kind, coach) => {
+      if (kind === "near" && placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+      }
+    },
+    onExit: (_kind, coach) => {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = coach;
+      void session.end();
+    },
+  });
+  const unlisten = arListenPocketSensors((sample) => arm.note(sample));
+
   await new Promise<void>((resolve) => {
     session.addEventListener("end", () => resolve(), { once: true });
   });
 
+  arm.dispose();
+  unlisten();
   overlay.exit.removeEventListener("click", onExit);
   unwireDebug();
   unbindSession();
