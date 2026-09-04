@@ -1,5 +1,6 @@
 import ARKit
 import Capacitor
+import CoreMotion
 import SceneKit
 import UIKit
 
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "magState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private let motion = CMMotionManager()
+    private var magSupported = false
+    private var magX: Double = 0
+    private var magY: Double = 0
+    private var magZ: Double = 0
+    private var magAccuracy = Int.min
+    private var lastMagKind = "ok"
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -59,6 +68,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func magState(_ call: CAPPluginCall) {
+        call.resolve(magPayload())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -107,6 +120,64 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startMagWatch()
+    }
+
+    private func startMagWatch() {
+        stopMagWatch()
+        guard motion.isDeviceMotionAvailable else {
+            magSupported = false
+            return
+        }
+        magSupported = true
+        motion.deviceMotionUpdateInterval = 0.12
+        motion.startDeviceMotionUpdates(using: .xMagneticNorthZVertical, to: .main) { [weak self] data, _ in
+            guard let self, let field = data?.magneticField else { return }
+            self.magX = field.field.x
+            self.magY = field.field.y
+            self.magZ = field.field.z
+            self.magAccuracy = Int(field.accuracy.rawValue)
+            self.maybeEmitMag()
+        }
+    }
+
+    private func stopMagWatch() {
+        if motion.isDeviceMotionActive {
+            motion.stopDeviceMotionUpdates()
+        }
+        lastMagKind = "ok"
+    }
+
+    private func magPayload() -> [String: Any] {
+        var ret: [String: Any] = ["supported": magSupported]
+        if magSupported {
+            ret["x"] = magX
+            ret["y"] = magY
+            ret["z"] = magZ
+            ret["uT"] = hypot(magX, hypot(magY, magZ))
+            if magAccuracy != Int.min {
+                ret["accuracyCode"] = magAccuracy
+            }
+        }
+        return ret
+    }
+
+    private func judgeMag() -> String {
+        if !magSupported { return "ok" }
+        if magAccuracy == -1 { return "uncalibrated" }
+        let uT = hypot(magX, hypot(magY, magZ))
+        if uT < 15 || uT > 80 { return "interfere" }
+        if magAccuracy == 0 { return "weak" }
+        return "ok"
+    }
+
+    private func maybeEmitMag() {
+        let kind = judgeMag()
+        guard kind != lastMagKind else { return }
+        lastMagKind = kind
+        var ret = magPayload()
+        ret["kind"] = kind
+        notifyListeners("magChanged", data: ret)
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +191,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopMagWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

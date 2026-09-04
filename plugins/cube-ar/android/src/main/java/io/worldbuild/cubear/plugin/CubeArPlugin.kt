@@ -67,6 +67,14 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var magManager: SensorManager? = null
+    private var magListener: SensorEventListener? = null
+    private var magSupported = false
+    private var magX = 0f
+    private var magY = 0f
+    private var magZ = 0f
+    private var magAccuracy = Int.MIN_VALUE
+    private var lastMagKind = "ok"
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -180,6 +188,11 @@ class CubeArPlugin : Plugin() {
             depth++
         }
         return parts.joinToString(" ← ")
+    }
+
+    @PluginMethod
+    fun magState(call: PluginCall) {
+        call.resolve(magPayload())
     }
 
     @PluginMethod
@@ -347,6 +360,7 @@ class CubeArPlugin : Plugin() {
                 // Samsung One UI 8 / ARCore 1.54+: hold uncalibrated IMU open so
                 // Session.resume() does not hit "Failed to register sensor to queue 0".
                 startImuWarmup(activity)
+                startMagWatch(activity)
                 sceneView.postDelayed({
                     if (arSceneView !== sceneView) return@postDelayed
                     try {
@@ -357,6 +371,7 @@ class CubeArPlugin : Plugin() {
                     } catch (ex: Exception) {
                         attachCompleted = false
                         stopImuWarmup()
+                        stopMagWatch()
                         arLifecycleOwner = null
                         safeDestroySceneView(sceneView)
                         arSceneView = null
@@ -469,6 +484,81 @@ class CubeArPlugin : Plugin() {
         }
         imuWarmupListener = null
         sensorManager = null
+    }
+
+    private fun startMagWatch(context: Context) {
+        stopMagWatch()
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: run {
+            magSupported = false
+            return
+        }
+        val sensor = sm.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD) ?: run {
+            magSupported = false
+            return
+        }
+        magSupported = true
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                val values = event?.values ?: return
+                magX = values[0]
+                magY = values[1]
+                magZ = values[2]
+                maybeEmitMag()
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+                magAccuracy = accuracy
+                maybeEmitMag()
+            }
+        }
+        sm.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
+        magManager = sm
+        magListener = listener
+    }
+
+    private fun stopMagWatch() {
+        val listener = magListener ?: return
+        try {
+            magManager?.unregisterListener(listener)
+        } catch (_: Exception) {
+            // already unregistered
+        }
+        magListener = null
+        magManager = null
+        lastMagKind = "ok"
+    }
+
+    private fun magPayload(): JSObject {
+        val ret = JSObject()
+        ret.put("supported", magSupported)
+        if (magSupported) {
+            ret.put("x", magX.toDouble())
+            ret.put("y", magY.toDouble())
+            ret.put("z", magZ.toDouble())
+            ret.put("uT", kotlin.math.hypot(magX.toDouble(), kotlin.math.hypot(magY.toDouble(), magZ.toDouble())))
+            if (magAccuracy != Int.MIN_VALUE) {
+                ret.put("accuracyCode", magAccuracy)
+            }
+        }
+        return ret
+    }
+
+    private fun judgeMag(): String {
+        if (!magSupported) return "ok"
+        if (magAccuracy == SensorManager.SENSOR_STATUS_UNRELIABLE) return "uncalibrated"
+        val uT = kotlin.math.hypot(magX.toDouble(), kotlin.math.hypot(magY.toDouble(), magZ.toDouble()))
+        if (uT < 15 || uT > 80) return "interfere"
+        if (magAccuracy == SensorManager.SENSOR_STATUS_ACCURACY_LOW) return "weak"
+        return "ok"
+    }
+
+    private fun maybeEmitMag() {
+        val kind = judgeMag()
+        if (kind == lastMagKind) return
+        lastMagKind = kind
+        val ret = magPayload()
+        ret.put("kind", kind)
+        notifyListeners("magChanged", ret)
     }
 
 
@@ -630,6 +720,7 @@ class CubeArPlugin : Plugin() {
         sessionFrameReceived = false
         attachCompleted = false
         stopImuWarmup()
+        stopMagWatch()
         arSceneView?.let { view ->
             safeDestroySceneView(view)
             arSceneView = null
