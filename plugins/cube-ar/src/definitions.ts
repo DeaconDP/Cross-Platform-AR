@@ -27,11 +27,23 @@ export interface CubeARTrackingEvent {
   message?: string;
 }
 
+export type CubeARNetState = {
+  supported?: boolean;
+  online?: boolean;
+  type?: "wifi" | "cellular" | "ethernet" | "none" | "unknown";
+  downlinkMbps?: number | null;
+  rttMs?: number | null;
+  captive?: boolean;
+  constrained?: boolean;
+  kind?: string;
+};
+
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  netState(): Promise<CubeARNetState>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +51,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "netChanged",
+    listenerFunc: (event: CubeARNetState) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

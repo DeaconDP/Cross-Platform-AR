@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arArmNet, arListenNet, arReadBrowserNet } from "./ar-net";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -76,6 +77,15 @@ export async function startWebXR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const netArm = arArmNet({
+    product: "cubes",
+    poll: () => arReadBrowserNet(),
+    onKind: (kind, coach) => {
+      if (placed === 0 && kind !== "ok") overlay.hint.textContent = coach;
+    },
+  });
+  const unlistenNet = arListenNet((sample) => netArm.note(sample));
+
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
     const cube = createCube();
@@ -94,6 +104,8 @@ export async function startWebXR(
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    netArm.dispose();
+    unlistenNet();
     unwireDebug();
     unbindSession();
     await session.end();
@@ -157,6 +169,8 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  netArm.dispose();
+  unlistenNet();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
