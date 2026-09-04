@@ -15,6 +15,11 @@ export interface CubeARTapOptions {
 export interface CubeARTapResult {
     placed: boolean;
     count: number;
+    shaky?: boolean;
+}
+export interface CubeARMotionState {
+    g: number;
+    moving: boolean;
 }
 export interface CubeARTrackingEvent {
     state: "initializing" | "ready" | "limited" | "unavailable";
@@ -22,6 +27,7 @@ export interface CubeARTrackingEvent {
 }
 export interface CubeARPlugin {
     isSupported(): Promise<CubeARSupportResult>;
+    motionState(): Promise<CubeARMotionState>;
     startSession(options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;

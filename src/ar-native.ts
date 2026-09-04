@@ -7,6 +7,13 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import {
+  arArmStill,
+  arStillAllowsPlace,
+  arStillCoach,
+  arTapWasShaky,
+  type ArStillKind,
+} from "./ar-still";
 import type { OverlayElements } from "./ar-webxr";
 
 /** Map native plugin rejection messages to actionable user guidance. */
@@ -87,9 +94,29 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  let stillKind: ArStillKind = "ok";
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const disposeStill = arArmStill({
+    getNative: async () => {
+      try {
+        return await CubeAR.motionState();
+      } catch {
+        return null;
+      }
+    },
+    onChange: (kind) => {
+      stillKind = kind;
+      if (placed === 0) {
+        const copy = arStillCoach(kind);
+        if (copy) {
+          overlay.hint.hidden = false;
+          overlay.hint.textContent = copy;
+        }
+      }
+    },
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -114,6 +141,12 @@ export async function startNativeAR(
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
+    if (!arStillAllowsPlace(stillKind)) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent =
+        arStillCoach(stillKind) ?? "Hold the phone still, then tap.";
+      return;
+    }
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
     try {
@@ -126,6 +159,9 @@ export async function startNativeAR(
         overlay.count.textContent = String(placed);
         overlay.hint.hidden = true;
         debug.logEvent(`cube placed (#${placed})`);
+      } else if (arTapWasShaky(result)) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = "Hold the phone still, then tap.";
       }
     } catch {
       debug.logEvent("tap failed");
@@ -157,6 +193,7 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    disposeStill();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");

@@ -1,5 +1,6 @@
 import ARKit
 import Capacitor
+import CoreMotion
 import SceneKit
 import UIKit
 
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "motionState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private let motion = CMMotionManager()
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -27,6 +30,11 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             "supported": supported,
             "backend": supported ? "arkit" : "none",
         ])
+    }
+
+    @objc func motionState(_ call: CAPPluginCall) {
+        let g = currentExcessG()
+        call.resolve(["g": g, "moving": g >= 0.18])
     }
 
     @objc func startSession(_ call: CAPPluginCall) {
@@ -44,6 +52,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startMotion()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -69,12 +78,16 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self, let view = self.arView else {
-                call.resolve(["placed": false, "count": self?.placedCount ?? 0])
+                call.resolve(["placed": false, "count": self?.placedCount ?? 0, "shaky": false])
+                return
+            }
+            if self.isShaky() {
+                call.resolve(["placed": false, "count": self.placedCount, "shaky": true])
                 return
             }
 
             let placed = self.placeCube(at: CGPoint(x: CGFloat(x), y: CGFloat(y)), in: view)
-            call.resolve(["placed": placed, "count": self.placedCount])
+            call.resolve(["placed": placed, "count": self.placedCount, "shaky": false])
         }
     }
 
@@ -119,7 +132,37 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func startMotion() {
+        if motion.isDeviceMotionAvailable {
+            motion.deviceMotionUpdateInterval = 1.0 / 20.0
+            motion.startDeviceMotionUpdates(using: .xArbitraryZVertical)
+        } else if motion.isAccelerometerAvailable {
+            motion.accelerometerUpdateInterval = 1.0 / 20.0
+            motion.startAccelerometerUpdates()
+        }
+    }
+
+    private func stopMotion() {
+        motion.stopDeviceMotionUpdates()
+        motion.stopAccelerometerUpdates()
+    }
+
+    private func currentExcessG() -> Double {
+        if let user = motion.deviceMotion?.userAcceleration {
+            return sqrt(user.x * user.x + user.y * user.y + user.z * user.z)
+        }
+        if let accel = motion.accelerometerData?.acceleration {
+            return abs(sqrt(accel.x * accel.x + accel.y * accel.y + accel.z * accel.z) - 1)
+        }
+        return 0
+    }
+
+    private func isShaky() -> Bool {
+        currentExcessG() >= 0.18
+    }
+
     private func detachArView() {
+        stopMotion()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
