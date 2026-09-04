@@ -67,6 +67,10 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var stillSensors: SensorManager? = null
+    private var stillListener: SensorEventListener? = null
+    private var stillLinear = false
+    private val lastMotion = floatArrayOf(0f, 0f, 0f)
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -87,6 +91,15 @@ class CubeArPlugin : Plugin() {
         val result = JSObject()
         result.put("supported", supported)
         result.put("backend", if (supported) "arcore" else "none")
+        call.resolve(result)
+    }
+
+    @PluginMethod
+    fun motionState(call: PluginCall) {
+        val g = currentExcessG()
+        val result = JSObject()
+        result.put("g", g)
+        result.put("moving", g >= 0.18f)
         call.resolve(result)
     }
 
@@ -209,6 +222,15 @@ class CubeArPlugin : Plugin() {
                 val result = JSObject()
                 result.put("placed", false)
                 result.put("count", placedCount)
+                result.put("shaky", false)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
+            if (isShaky()) {
+                val result = JSObject()
+                result.put("placed", false)
+                result.put("count", placedCount)
+                result.put("shaky", true)
                 call.resolve(result)
                 return@executeOnMainThread
             }
@@ -217,12 +239,14 @@ class CubeArPlugin : Plugin() {
             val result = JSObject()
             result.put("placed", placed)
             result.put("count", placedCount)
+            result.put("shaky", false)
             call.resolve(result)
         }
     }
 
     private fun attachArView(onReady: () -> Unit, onFailed: (Exception) -> Unit = {}) {
         detachArView()
+        startStillMotion()
 
         val activity = activity as? ComponentActivity
             ?: throw IllegalStateException("No activity")
@@ -625,10 +649,55 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun startStillMotion() {
+        stopStillMotion()
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+        val linear = sm.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+        val accel = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        val chosen = linear ?: accel ?: return
+        stillLinear = linear != null
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                val values = event?.values ?: return
+                if (values.size < 3) return
+                lastMotion[0] = values[0]
+                lastMotion[1] = values[1]
+                lastMotion[2] = values[2]
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        if (!sm.registerListener(listener, chosen, SensorManager.SENSOR_DELAY_UI)) return
+        stillSensors = sm
+        stillListener = listener
+    }
+
+    private fun stopStillMotion() {
+        val listener = stillListener ?: return
+        try {
+            stillSensors?.unregisterListener(listener)
+        } catch (_: Exception) {
+            // already unregistered
+        }
+        stillListener = null
+        stillSensors = null
+    }
+
+    private fun currentExcessG(): Float {
+        val mag = kotlin.math.hypot(
+            lastMotion[0].toDouble(),
+            kotlin.math.hypot(lastMotion[1].toDouble(), lastMotion[2].toDouble()),
+        ).toFloat()
+        return if (stillLinear) mag / 9.80665f else kotlin.math.abs(mag / 9.80665f - 1f)
+    }
+
+    private fun isShaky(): Boolean = currentExcessG() >= 0.18f
+
     private fun detachArView() {
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
+        stopStillMotion()
         stopImuWarmup()
         arSceneView?.let { view ->
             safeDestroySceneView(view)

@@ -1,4 +1,10 @@
 import * as THREE from "three";
+import {
+  arArmStill,
+  arStillAllowsPlace,
+  arStillCoach,
+  type ArStillKind,
+} from "./ar-still";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -72,11 +78,30 @@ export async function startWebXR(
   const unbindSession = debug.bindSession(session);
 
   let placed = 0;
+  let stillKind: ArStillKind = "ok";
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const disposeStill = arArmStill({
+    onChange: (kind) => {
+      stillKind = kind;
+      if (placed === 0) {
+        const copy = arStillCoach(kind);
+        if (copy) {
+          overlay.hint.hidden = false;
+          overlay.hint.textContent = copy;
+        }
+      }
+    },
+  });
 
   session.addEventListener("select", () => {
+    if (!arStillAllowsPlace(stillKind)) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent =
+        arStillCoach(stillKind) ?? "Hold the phone still, then tap.";
+      return;
+    }
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
@@ -157,6 +182,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  disposeStill();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
