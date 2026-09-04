@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arArmNet, arListenNet, arReadBrowserNet } from "./ar-net";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -91,6 +92,24 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const netArm = arArmNet({
+    product: "cubes",
+    poll: async () => {
+      try {
+        return await CubeAR.netState();
+      } catch {
+        return arReadBrowserNet();
+      }
+    },
+    onKind: (kind, coach) => {
+      if (placed === 0 && kind !== "ok") overlay.hint.textContent = coach;
+    },
+  });
+  const unlistenNet = arListenNet((sample) => netArm.note(sample));
+  const netListener = await CubeAR.addListener("netChanged", (event) => {
+    netArm.note(event);
+  });
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
@@ -157,6 +176,9 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    netArm.dispose();
+    unlistenNet();
+    await netListener.remove();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");

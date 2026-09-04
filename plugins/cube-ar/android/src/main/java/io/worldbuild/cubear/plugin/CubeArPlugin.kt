@@ -3,6 +3,9 @@ package io.worldbuild.cubear.plugin
 import android.Manifest
 import android.content.Context
 import android.graphics.Color
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -67,6 +70,14 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var netManager: ConnectivityManager? = null
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    private var netSupported = true
+    private var netOnline = true
+    private var netCaptive = false
+    private var netType = "unknown"
+    private var netDownlinkMbps: Double? = null
+    private var lastNetKind = "ok"
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +159,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startNetWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -190,6 +202,121 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun netState(call: PluginCall) {
+        startNetWatch()
+        call.resolve(netPayload())
+    }
+
+    private fun startNetWatch() {
+        if (netCallback != null) return
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        if (cm == null) {
+            netSupported = false
+            return
+        }
+        netManager = cm
+        applyNetwork(cm.activeNetwork, cm)
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                applyNetwork(network, cm)
+            }
+
+            override fun onLost(network: Network) {
+                applyNetwork(cm.activeNetwork, cm)
+            }
+
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                applyCaps(caps)
+            }
+        }
+        try {
+            cm.registerDefaultNetworkCallback(callback)
+            netCallback = callback
+        } catch (_: Exception) {
+            netSupported = false
+            netCallback = null
+        }
+    }
+
+    private fun applyNetwork(network: Network?, cm: ConnectivityManager) {
+        if (network == null) {
+            netOnline = false
+            netType = "none"
+            netCaptive = false
+            netDownlinkMbps = null
+            maybeEmitNet()
+            return
+        }
+        val caps = cm.getNetworkCapabilities(network)
+        if (caps == null) {
+            netOnline = false
+            maybeEmitNet()
+            return
+        }
+        applyCaps(caps)
+    }
+
+    private fun applyCaps(caps: NetworkCapabilities) {
+        val validated =
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        netOnline = validated
+        netCaptive = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)
+        netType = when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+            validated -> "unknown"
+            else -> "none"
+        }
+        val kbps = caps.linkDownstreamBandwidthKbps
+        netDownlinkMbps = if (kbps > 0) kbps / 1000.0 else null
+        maybeEmitNet()
+    }
+
+    private fun stopNetWatch() {
+        val cm = netManager
+        val cb = netCallback
+        if (cm != null && cb != null) {
+            try {
+                cm.unregisterNetworkCallback(cb)
+            } catch (_: Exception) {
+                /* already unregistered */
+            }
+        }
+        netCallback = null
+        lastNetKind = "ok"
+    }
+
+    private fun netPayload(): JSObject {
+        val ret = JSObject()
+        ret.put("supported", netSupported)
+        ret.put("online", netOnline)
+        ret.put("type", netType)
+        ret.put("captive", netCaptive)
+        netDownlinkMbps?.let { ret.put("downlinkMbps", it) }
+        return ret
+    }
+
+    private fun judgeNet(): String {
+        if (!netSupported) return "ok"
+        if (netCaptive) return "captive"
+        if (!netOnline || netType == "none") return "offline"
+        val down = netDownlinkMbps
+        if (down != null && down > 0 && down < 0.4) return "slow"
+        return "ok"
+    }
+
+    private fun maybeEmitNet() {
+        val kind = judgeNet()
+        if (kind == lastNetKind) return
+        lastNetKind = kind
+        val ret = netPayload()
+        ret.put("kind", kind)
+        notifyListeners("netChanged", ret)
     }
 
     @PluginMethod
@@ -626,6 +753,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopNetWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

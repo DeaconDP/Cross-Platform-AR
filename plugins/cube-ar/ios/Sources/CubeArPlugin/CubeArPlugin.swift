@@ -1,5 +1,6 @@
 import ARKit
 import Capacitor
+import Network
 import SceneKit
 import UIKit
 
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "netState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,14 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var netMonitor: NWPathMonitor?
+    private let netQueue = DispatchQueue(label: "io.worldbuild.cube.ar.net")
+    private var netSupported = true
+    private var netOnline = true
+    private var netType = "unknown"
+    private var netCaptive = false
+    private var netConstrained = false
+    private var lastNetKind = "ok"
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +54,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startNetWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -59,6 +70,68 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func netState(_ call: CAPPluginCall) {
+        startNetWatch()
+        call.resolve(netPayload())
+    }
+
+    private func startNetWatch() {
+        if netMonitor != nil { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard let self else { return }
+            self.netOnline = path.status == .satisfied
+            self.netConstrained = path.isConstrained
+            if path.usesInterfaceType(.wifi) {
+                self.netType = "wifi"
+            } else if path.usesInterfaceType(.cellular) {
+                self.netType = "cellular"
+            } else if path.usesInterfaceType(.wiredEthernet) {
+                self.netType = "ethernet"
+            } else if path.status != .satisfied {
+                self.netType = "none"
+            } else {
+                self.netType = "unknown"
+            }
+            self.maybeEmitNet()
+        }
+        monitor.start(queue: netQueue)
+        netMonitor = monitor
+    }
+
+    private func stopNetWatch() {
+        netMonitor?.cancel()
+        netMonitor = nil
+        lastNetKind = "ok"
+    }
+
+    private func netPayload() -> [String: Any] {
+        [
+            "supported": netSupported,
+            "online": netOnline,
+            "type": netType,
+            "captive": netCaptive,
+            "constrained": netConstrained,
+        ]
+    }
+
+    private func judgeNet() -> String {
+        if !netSupported { return "ok" }
+        if netCaptive { return "captive" }
+        if !netOnline || netType == "none" { return "offline" }
+        if netConstrained { return "slow" }
+        return "ok"
+    }
+
+    private func maybeEmitNet() {
+        let kind = judgeNet()
+        guard kind != lastNetKind else { return }
+        lastNetKind = kind
+        var ret = netPayload()
+        ret["kind"] = kind
+        notifyListeners("netChanged", data: ret)
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -120,6 +193,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopNetWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
