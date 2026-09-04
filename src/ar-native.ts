@@ -8,6 +8,13 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  AR_PHONE_CLOSE_MS,
+  arArmPhone,
+  arListenPhone,
+  arPhoneBlocksPlace,
+  arPhoneShouldClose,
+} from "./ar-phone";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -91,6 +98,31 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const arm = arArmPhone({
+    product: "cubes",
+    poll: async () => {
+      try {
+        return await CubeAR.phoneState();
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      if (kind === "ok") return;
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = coach;
+      if (arPhoneShouldClose(kind)) {
+        window.setTimeout(() => {
+          void CubeAR.stopSession();
+        }, AR_PHONE_CLOSE_MS);
+      }
+    },
+  });
+  const unlistenPhone = arListenPhone((sample) => arm.note(sample));
+  const phoneListener = await CubeAR.addListener("phoneChanged", (data) => {
+    arm.note(data);
+  });
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
@@ -114,6 +146,8 @@ export async function startNativeAR(
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
+    if (arPhoneBlocksPlace(arm.kind())) return;
+
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
     try {
@@ -121,6 +155,7 @@ export async function startNativeAR(
         x: event.clientX * dpr,
         y: event.clientY * dpr,
       });
+      if (result.interrupted) return;
       if (result.placed) {
         placed = result.count;
         overlay.count.textContent = String(placed);
@@ -157,6 +192,9 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    arm.dispose();
+    unlistenPhone();
+    phoneListener.remove();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");

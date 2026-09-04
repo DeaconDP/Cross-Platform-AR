@@ -1,4 +1,6 @@
 import ARKit
+import AVFoundation
+import CallKit
 import Capacitor
 import SceneKit
 import UIKit
@@ -12,6 +14,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "phoneState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +23,14 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var callObserver: CXCallObserver?
+    private var phoneSupported = true
+    private var phoneRinging = false
+    private var phoneInCall = false
+    private var phoneInterrupted = false
+    private var phoneReason = "unknown"
+    private var lastPhoneKind = "ok"
+    private var phoneCloseWork: DispatchWorkItem?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +55,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startPhoneWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -72,10 +84,112 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve(["placed": false, "count": self?.placedCount ?? 0])
                 return
             }
+            if self.phoneBusy() {
+                call.resolve(["placed": false, "count": self.placedCount, "interrupted": true])
+                return
+            }
 
             let placed = self.placeCube(at: CGPoint(x: CGFloat(x), y: CGFloat(y)), in: view)
             call.resolve(["placed": placed, "count": self.placedCount])
         }
+    }
+
+    @objc func phoneState(_ call: CAPPluginCall) {
+        startPhoneWatch()
+        call.resolve(phonePayload())
+    }
+
+    private func startPhoneWatch() {
+        if callObserver != nil { return }
+        let observer = CXCallObserver()
+        observer.setDelegate(self, queue: .main)
+        callObserver = observer
+        applyCalls(observer.calls)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onAudioInterrupt(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+    }
+
+    private func stopPhoneWatch() {
+        phoneCloseWork?.cancel()
+        phoneCloseWork = nil
+        NotificationCenter.default.removeObserver(
+            self,
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        callObserver?.setDelegate(nil, queue: nil)
+        callObserver = nil
+        lastPhoneKind = "ok"
+    }
+
+    private func applyCalls(_ calls: [CXCall]) {
+        phoneRinging = calls.contains { !$0.hasEnded && !$0.hasConnected }
+        phoneInCall = calls.contains { !$0.hasEnded && $0.hasConnected }
+        if phoneRinging || phoneInCall { phoneReason = "call" }
+        maybeEmitPhone()
+    }
+
+    @objc private func onAudioInterrupt(_ note: Notification) {
+        guard
+            let info = note.userInfo,
+            let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+            let type = AVAudioSession.InterruptionType(rawValue: raw)
+        else { return }
+        if type == .began {
+            phoneInterrupted = true
+            if phoneReason == "unknown" { phoneReason = "focus" }
+        } else {
+            phoneInterrupted = false
+        }
+        maybeEmitPhone()
+    }
+
+    private func phonePayload() -> [String: Any] {
+        [
+            "supported": phoneSupported,
+            "ringing": phoneRinging,
+            "inCall": phoneInCall,
+            "interrupted": phoneInterrupted,
+            "reason": phoneReason,
+        ]
+    }
+
+    private func judgePhone() -> String {
+        if !phoneSupported { return "ok" }
+        if phoneInCall || phoneInterrupted { return "active" }
+        if phoneRinging { return "ringing" }
+        return "ok"
+    }
+
+    private func phoneBusy() -> Bool {
+        judgePhone() != "ok"
+    }
+
+    private func maybeEmitPhone() {
+        let kind = judgePhone()
+        if kind == "active" {
+            if phoneCloseWork == nil {
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, self.judgePhone() == "active" else { return }
+                    self.detachArView()
+                    self.notifyListeners("sessionEnded", data: [:])
+                }
+                phoneCloseWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+            }
+        } else {
+            phoneCloseWork?.cancel()
+            phoneCloseWork = nil
+        }
+        guard kind != lastPhoneKind else { return }
+        lastPhoneKind = kind
+        var ret = phonePayload()
+        ret["kind"] = kind
+        notifyListeners("phoneChanged", data: ret)
     }
 
     private func attachArView() throws {
@@ -120,6 +234,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopPhoneWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
@@ -187,7 +302,11 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 }
 
-extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
+extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate, CXCallObserverDelegate {
+    public func callObserver(_ callObserver: CXCallObserver, callChanged call: CXCall) {
+        applyCalls(callObserver.calls)
+    }
+
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard let view = arView, let frame = view.session.currentFrame else { return }
         DispatchQueue.main.async { [weak self] in

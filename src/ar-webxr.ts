@@ -6,6 +6,13 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import {
+  AR_PHONE_CLOSE_MS,
+  arArmPhone,
+  arListenPhone,
+  arPhoneBlocksPlace,
+  arPhoneShouldClose,
+} from "./ar-phone";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -76,7 +83,23 @@ export async function startWebXR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const arm = arArmPhone({
+    product: "cubes",
+    onKind: (kind, coach) => {
+      if (kind === "ok") return;
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = coach;
+      if (arPhoneShouldClose(kind)) {
+        window.setTimeout(() => {
+          void session.end();
+        }, AR_PHONE_CLOSE_MS);
+      }
+    },
+  });
+  const unlistenPhone = arListenPhone((sample) => arm.note(sample));
+
   session.addEventListener("select", () => {
+    if (arPhoneBlocksPlace(arm.kind())) return;
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
@@ -157,6 +180,8 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  arm.dispose();
+  unlistenPhone();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
