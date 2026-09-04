@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arArmHaptic } from "./ar-haptic";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -72,12 +73,22 @@ export async function startWebXR(
   const unbindSession = debug.bindSession(session);
 
   let placed = 0;
+  const haptic = arArmHaptic({
+    product: "cubes",
+    onCoach: (coach, kind) => {
+      if (kind === "miss" && placed === 0) overlay.hint.textContent = coach;
+    },
+  });
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
   session.addEventListener("select", () => {
-    if (!reticle.visible) return;
+    if (!reticle.visible) {
+      haptic.play("miss");
+      return;
+    }
+    haptic.play("place");
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
     cube.rotateY(Math.random() * Math.PI * 2);
@@ -123,6 +134,7 @@ export async function startWebXR(
           reticle.matrix.decompose(reticlePos, reticle.quaternion, reticle.scale);
           if (!surfaceFound) {
             surfaceFound = true;
+            haptic.play("surface");
             debug.logEvent("surface found");
             if (placed === 0) overlay.hint.textContent = "Tap to place a cube";
           }
@@ -157,6 +169,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  haptic.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

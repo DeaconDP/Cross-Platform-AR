@@ -27,11 +27,15 @@ export interface CubeARTrackingEvent {
   message?: string;
 }
 
+export type CubeARHapticKind = "surface" | "place" | "miss" | "error" | "lift";
+
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  haptic(options: { kind: CubeARHapticKind }): Promise<void>;
+  hapticPrefs(): Promise<{ enabled: boolean; muted: boolean }>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
