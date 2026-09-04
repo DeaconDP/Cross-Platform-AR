@@ -32,6 +32,7 @@ export interface CubeARPlugin {
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  centerTap(): Promise<CubeARTapResult>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,

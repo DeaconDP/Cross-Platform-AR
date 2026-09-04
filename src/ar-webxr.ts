@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arArmCenterPlace, arCenterCoach } from "./ar-center";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -76,7 +77,7 @@ export async function startWebXR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
-  session.addEventListener("select", () => {
+  const placeAtReticle = () => {
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
@@ -86,6 +87,15 @@ export async function startWebXR(
     overlay.count.textContent = String(placed);
     overlay.hint.hidden = true;
     debug.logEvent(`cube placed (#${placed})`);
+  };
+
+  session.addEventListener("select", () => {
+    placeAtReticle();
+  });
+
+  const disposeCenter = arArmCenterPlace({
+    isLive: () => true,
+    onPlace: placeAtReticle,
   });
 
   const onExit = () => session.end();
@@ -94,6 +104,7 @@ export async function startWebXR(
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    disposeCenter();
     unwireDebug();
     unbindSession();
     await session.end();
@@ -124,7 +135,10 @@ export async function startWebXR(
           if (!surfaceFound) {
             surfaceFound = true;
             debug.logEvent("surface found");
-            if (placed === 0) overlay.hint.textContent = "Tap to place a cube";
+            if (placed === 0) {
+              overlay.hint.textContent =
+                arCenterCoach({}) ?? "Tap to place a cube";
+            }
           }
         }
       } else {
@@ -156,6 +170,7 @@ export async function startWebXR(
     session.addEventListener("end", () => resolve(), { once: true });
   });
 
+  disposeCenter();
   overlay.exit.removeEventListener("click", onExit);
   unwireDebug();
   unbindSession();

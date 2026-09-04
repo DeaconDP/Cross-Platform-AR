@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async centerTap() {
+        return { placed: false, count: 0 };
+    }
 }

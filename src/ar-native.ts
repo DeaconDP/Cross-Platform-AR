@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arArmCenterPlace, arCenterCoach } from "./ar-center";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -89,7 +90,7 @@ export async function startNativeAR(
   let placed = 0;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
-  overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.hint.textContent = arCenterCoach({}) ?? "Move your phone to find a surface";
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -134,6 +135,25 @@ export async function startNativeAR(
 
   document.addEventListener("pointerdown", onTap);
 
+  const disposeCenter = arArmCenterPlace({
+    isLive: () => true,
+    onPlace: () => {
+      void (async () => {
+        try {
+          const result = await CubeAR.centerTap();
+          if (result.placed) {
+            placed = result.count;
+            overlay.count.textContent = String(placed);
+            overlay.hint.hidden = true;
+            debug.logEvent(`cube placed (#${placed})`);
+          }
+        } catch {
+          debug.logEvent("center tap failed");
+        }
+      })();
+    },
+  });
+
   const onExit = async () => {
     overlay.exit.disabled = true;
     try {
@@ -155,6 +175,7 @@ export async function startNativeAR(
     await sessionEnded;
   } finally {
     document.removeEventListener("pointerdown", onTap);
+    disposeCenter();
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
