@@ -67,6 +67,17 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private val placedNodes = mutableListOf<AnchorNode>()
+    private var shakeSensors: SensorManager? = null
+    private var shakeListener: SensorEventListener? = null
+    private var lastAx = 0f
+    private var lastAy = 0f
+    private var lastAz = 0f
+    private var lastShaking = false
+    private var shakeCrossings = 0
+    private var shakeLastSign = 0
+    private var shakeWindowStart = 0L
+    private var shakeLastFire = 0L
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -78,6 +89,9 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+        private const val SHAKE_PEAK = 3.2f
+        private const val SHAKE_WINDOW_MS = 650L
+        private const val SHAKE_COOLDOWN_MS = 1400L
     }
 
     @PluginMethod
@@ -97,6 +111,7 @@ class CubeArPlugin : Plugin() {
         cubeSizeM = max(0.05f, size)
         cubeColorHex = color
         placedCount = 0
+        placedNodes.clear()
         surfaceFound = false
 
         if (getPermissionState("camera") == PermissionState.GRANTED) {
@@ -189,6 +204,27 @@ class CubeArPlugin : Plugin() {
             detachArView()
             notifySessionEnded()
             call.resolve()
+        }
+    }
+
+    @PluginMethod
+    fun shakeState(call: PluginCall) {
+        val result = JSObject()
+        result.put("shaking", lastShaking)
+        result.put("ax", lastAx.toDouble())
+        result.put("ay", lastAy.toDouble())
+        result.put("az", lastAz.toDouble())
+        call.resolve(result)
+    }
+
+    @PluginMethod
+    fun liftLast(call: PluginCall) {
+        bridge.executeOnMainThread {
+            val lifted = removeLastCube()
+            val result = JSObject()
+            result.put("lifted", lifted)
+            result.put("count", placedCount)
+            call.resolve(result)
         }
     }
 
@@ -347,6 +383,7 @@ class CubeArPlugin : Plugin() {
                 // Samsung One UI 8 / ARCore 1.54+: hold uncalibrated IMU open so
                 // Session.resume() does not hit "Failed to register sensor to queue 0".
                 startImuWarmup(activity)
+                startShakeWatch()
                 sceneView.postDelayed({
                     if (arSceneView !== sceneView) return@postDelayed
                     try {
@@ -601,7 +638,101 @@ class CubeArPlugin : Plugin() {
         cube.position = io.github.sceneview.math.Position(0f, cubeSizeM / 2f, 0f)
         anchorNode.addChildNode(cube)
         sceneView.addChildNode(anchorNode)
-        placedCount++
+        placedNodes.add(anchorNode)
+        placedCount = placedNodes.size
+    }
+
+    private fun removeLastCube(): Boolean {
+        if (placedNodes.isEmpty()) return false
+        val last = placedNodes.removeAt(placedNodes.lastIndex)
+        arSceneView?.removeChildNode(last)
+        placedCount = placedNodes.size
+        return true
+    }
+
+    private fun startShakeWatch() {
+        stopShakeWatch()
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+        val linear = sm.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+        val accel = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        val use = linear ?: accel ?: return
+        val stripGravity = linear == null
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                val values = event?.values ?: return
+                var ax = values[0]
+                var ay = values[1]
+                var az = values[2]
+                if (stripGravity) az -= 9.81f
+                tickShake(ax, ay, az)
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        if (sm.registerListener(listener, use, SensorManager.SENSOR_DELAY_GAME)) {
+            shakeSensors = sm
+            shakeListener = listener
+        }
+    }
+
+    private fun stopShakeWatch() {
+        val listener = shakeListener ?: return
+        try {
+            shakeSensors?.unregisterListener(listener)
+        } catch (_: Exception) {
+        }
+        shakeListener = null
+        shakeSensors = null
+        lastAx = 0f
+        lastAy = 0f
+        lastAz = 0f
+        lastShaking = false
+        shakeCrossings = 0
+        shakeLastSign = 0
+        shakeWindowStart = 0
+        shakeLastFire = 0
+    }
+
+    private fun tickShake(ax: Float, ay: Float, az: Float) {
+        lastAx = ax
+        lastAy = ay
+        lastAz = az
+        val mag = sqrt(ax * ax + ay * ay + az * az)
+        lastShaking = mag >= SHAKE_PEAK
+        val now = System.currentTimeMillis()
+        if (now - shakeLastFire < SHAKE_COOLDOWN_MS) return
+        if (now - shakeWindowStart > SHAKE_WINDOW_MS) {
+            shakeCrossings = 0
+            shakeLastSign = 0
+            shakeWindowStart = now
+        }
+        if (lastShaking) {
+            val axa = kotlin.math.abs(ax)
+            val aya = kotlin.math.abs(ay)
+            val aza = kotlin.math.abs(az)
+            val sign = when {
+                axa >= aya && axa >= aza -> if (ax == 0f) 0 else if (ax > 0f) 1 else -1
+                aya >= aza -> if (ay == 0f) 0 else if (ay > 0f) 1 else -1
+                else -> if (az == 0f) 0 else if (az > 0f) 1 else -1
+            }
+            if (sign != 0 && shakeLastSign != 0 && sign != shakeLastSign) {
+                shakeCrossings++
+            }
+            if (sign != 0) shakeLastSign = sign
+        }
+        if (shakeCrossings >= 1) {
+            shakeCrossings = 0
+            shakeLastSign = 0
+            shakeWindowStart = now
+            shakeLastFire = now
+            activity?.runOnUiThread {
+                if (removeLastCube()) {
+                    val payload = JSObject()
+                    payload.put("lifted", true)
+                    payload.put("count", placedCount)
+                    notifyListeners("shook", payload)
+                }
+            }
+        }
     }
 
     private fun scheduleSessionWatchdog() {
@@ -629,6 +760,8 @@ class CubeArPlugin : Plugin() {
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
+        stopShakeWatch()
+        placedNodes.clear()
         stopImuWarmup()
         arSceneView?.let { view ->
             safeDestroySceneView(view)

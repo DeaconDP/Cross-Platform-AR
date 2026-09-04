@@ -5,4 +5,14 @@ export declare class CubeARWeb extends WebPlugin implements CubeARPlugin {
     startSession(_options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult>;
+    shakeState(): Promise<{
+        shaking: boolean;
+        ax: number;
+        ay: number;
+        az: number;
+    }>;
+    liftLast(): Promise<{
+        lifted: boolean;
+        count: number;
+    }>;
 }

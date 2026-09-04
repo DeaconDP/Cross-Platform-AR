@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arShakeArm, arShakeCoach } from "./ar-shake";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -124,13 +125,53 @@ export async function startNativeAR(
       if (result.placed) {
         placed = result.count;
         overlay.count.textContent = String(placed);
-        overlay.hint.hidden = true;
+        overlay.hint.hidden = false;
+        const copy = arShakeCoach({ placed: placed > 0, kind: "cubes" });
+        overlay.hint.textContent = copy ?? "Tap to place a cube";
         debug.logEvent(`cube placed (#${placed})`);
+        shake.notePlaced(placed > 0);
       }
     } catch {
       debug.logEvent("tap failed");
     }
   };
+
+  const applyLift = (count: number) => {
+    placed = count;
+    overlay.count.textContent = String(placed);
+    overlay.hint.hidden = false;
+    overlay.hint.textContent =
+      placed > 0
+        ? (arShakeCoach({ placed: true, kind: "cubes" }) ?? "Tap to place a cube")
+        : "Move your phone to find a surface";
+    debug.logEvent(`cube lifted (now ${placed})`);
+    shake.notePlaced(placed > 0);
+  };
+
+  const shake = arShakeArm({
+    kind: "cubes",
+    canLift: () => placed > 0,
+    onLift: () => {
+      void CubeAR.liftLast()
+        .then((res) => {
+          if (res.lifted) applyLift(res.count);
+        })
+        .catch(() => undefined);
+    },
+    poll: async () => {
+      try {
+        const s = await CubeAR.shakeState();
+        return { ax: s.ax, ay: s.ay, az: s.az };
+      } catch {
+        return null;
+      }
+    },
+  });
+  shake.notePlaced(false);
+
+  const shookListener = await CubeAR.addListener("shook", (ev) => {
+    applyLift(ev.count);
+  });
 
   document.addEventListener("pointerdown", onTap);
 
@@ -154,10 +195,12 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    shake.dispose();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
+    void shookListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();
