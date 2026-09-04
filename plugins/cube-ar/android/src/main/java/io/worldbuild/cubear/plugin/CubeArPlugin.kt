@@ -9,6 +9,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +68,15 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var pocketSensors: SensorManager? = null
+    private var pocketListener: SensorEventListener? = null
+    private var proxNear = false
+    private var accelY = 0f
+    private var accelZ = 9.8f
+    private var haveAccel = false
+    private var pocketSince = 0L
+    private var pocketExited = false
+    private var pocketKind: String? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -190,6 +200,18 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun proximityState(call: PluginCall) {
+        val result = JSObject()
+        result.put("near", proxNear)
+        result.put("accelY", accelY.toDouble())
+        result.put("accelZ", accelZ.toDouble())
+        result.put("facedown", haveAccel && accelZ <= -6.5f)
+        result.put("upright", haveAccel && kotlin.math.abs(accelY) >= 6.5f)
+        result.put("osBlanksOnNear", false)
+        call.resolve(result)
     }
 
     @PluginMethod
@@ -347,6 +369,7 @@ class CubeArPlugin : Plugin() {
                 // Samsung One UI 8 / ARCore 1.54+: hold uncalibrated IMU open so
                 // Session.resume() does not hit "Failed to register sensor to queue 0".
                 startImuWarmup(activity)
+                startPocketWatch()
                 sceneView.postDelayed({
                     if (arSceneView !== sceneView) return@postDelayed
                     try {
@@ -356,6 +379,7 @@ class CubeArPlugin : Plugin() {
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
+                        stopPocketWatch()
                         stopImuWarmup()
                         arLifecycleOwner = null
                         safeDestroySceneView(sceneView)
@@ -458,6 +482,82 @@ class CubeArPlugin : Plugin() {
         if (registered == 0) return
         sensorManager = sm
         imuWarmupListener = listener
+    }
+
+    private fun startPocketWatch() {
+        stopPocketWatch()
+        pocketExited = false
+        pocketSince = 0
+        pocketKind = null
+        proxNear = false
+        haveAccel = false
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                val ev = event ?: return
+                when (ev.sensor.type) {
+                    Sensor.TYPE_PROXIMITY -> {
+                        val max = ev.sensor.maximumRange
+                        proxNear = ev.values[0] < minOf(max, 5f)
+                    }
+                    Sensor.TYPE_ACCELEROMETER -> {
+                        accelY = ev.values[1]
+                        accelZ = ev.values[2]
+                        haveAccel = true
+                    }
+                }
+                considerPocket()
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        sm.getDefaultSensor(Sensor.TYPE_PROXIMITY)?.let {
+            sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI)
+        }
+        sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
+            sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI)
+        }
+        pocketSensors = sm
+        pocketListener = listener
+    }
+
+    private fun considerPocket() {
+        if (arSceneView == null || pocketExited) return
+        val facedown = haveAccel && accelZ <= -6.5f
+        val upright = haveAccel && kotlin.math.abs(accelY) >= 6.5f
+        val kind = when {
+            proxNear && (facedown || upright) -> "pocket"
+            facedown -> "facedown"
+            else -> null
+        }
+        if (kind == null) {
+            pocketSince = 0
+            pocketKind = null
+            return
+        }
+        if (pocketKind != kind) {
+            pocketKind = kind
+            pocketSince = SystemClock.uptimeMillis()
+        }
+        val need = if (kind == "pocket") 400L else 1200L
+        if (SystemClock.uptimeMillis() - pocketSince < need) return
+        pocketExited = true
+        val data = JSObject()
+        data.put("kind", kind)
+        data.put("message", "Pocketed — AR closed so the camera does not stay on.")
+        notifyListeners("pocketed", data)
+        detachArView()
+        notifySessionEnded()
+    }
+
+    private fun stopPocketWatch() {
+        val listener = pocketListener ?: return
+        try {
+            pocketSensors?.unregisterListener(listener)
+        } catch (_: Exception) {
+            // already gone
+        }
+        pocketListener = null
+        pocketSensors = null
     }
 
     private fun stopImuWarmup() {
@@ -629,6 +729,7 @@ class CubeArPlugin : Plugin() {
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
+        stopPocketWatch()
         stopImuWarmup()
         arSceneView?.let { view ->
             safeDestroySceneView(view)

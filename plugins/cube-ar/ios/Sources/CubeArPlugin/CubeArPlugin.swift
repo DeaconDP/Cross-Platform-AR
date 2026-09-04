@@ -1,5 +1,6 @@
 import ARKit
 import Capacitor
+import CoreMotion
 import SceneKit
 import UIKit
 
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "proximityState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private let pocketMotion = CMMotionManager()
+    private var pocketTimer: Timer?
+    private var pocketSince: TimeInterval = 0
+    private var pocketKind: String?
+    private var pocketExited = false
+    private var proximityWasEnabled = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -59,6 +67,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func proximityState(_ call: CAPPluginCall) {
+        call.resolve(pocketSample())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -107,6 +119,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startPocketWatch()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -119,7 +132,104 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func pocketSample() -> [String: Any] {
+        let near = UIDevice.current.proximityState
+        var accelY = 0.0
+        var accelZ = 0.0
+        var facedown = false
+        var upright = false
+        if let data = pocketMotion.accelerometerData {
+            accelY = data.acceleration.y * 9.81
+            accelZ = data.acceleration.z * 9.81
+            facedown = data.acceleration.z >= 0.65
+            upright = abs(data.acceleration.y) >= 0.65
+        }
+        return [
+            "near": near,
+            "accelY": accelY,
+            "accelZ": accelZ,
+            "facedown": facedown,
+            "upright": upright,
+            "osBlanksOnNear": true,
+        ]
+    }
+
+    private func startPocketWatch() {
+        stopPocketWatch()
+        pocketExited = false
+        pocketSince = 0
+        pocketKind = nil
+        proximityWasEnabled = UIDevice.current.isProximityMonitoringEnabled
+        UIDevice.current.isProximityMonitoringEnabled = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onProximity),
+            name: UIDevice.proximityStateDidChangeNotification,
+            object: nil
+        )
+        if pocketMotion.isAccelerometerAvailable {
+            pocketMotion.accelerometerUpdateInterval = 0.2
+            pocketMotion.startAccelerometerUpdates()
+        }
+        pocketTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.considerPocket()
+        }
+    }
+
+    @objc private func onProximity() {
+        considerPocket()
+    }
+
+    private func considerPocket() {
+        guard arView != nil, !pocketExited else { return }
+        let near = UIDevice.current.proximityState
+        var facedown = false
+        if let data = pocketMotion.accelerometerData {
+            facedown = data.acceleration.z >= 0.65
+        }
+        let kind: String?
+        if near {
+            kind = "pocket"
+        } else if facedown {
+            kind = "facedown"
+        } else {
+            kind = nil
+        }
+        guard let kind else {
+            pocketSince = 0
+            pocketKind = nil
+            return
+        }
+        let now = Date().timeIntervalSince1970
+        if pocketKind != kind {
+            pocketKind = kind
+            pocketSince = now
+        }
+        let need = kind == "pocket" ? 0.4 : 1.2
+        if now - pocketSince < need { return }
+        pocketExited = true
+        notifyListeners("pocketed", data: [
+            "kind": kind,
+            "message": "Pocketed — AR closed so the camera does not stay on.",
+        ])
+        detachArView()
+        notifyListeners("sessionEnded", data: [:])
+    }
+
+    private func stopPocketWatch() {
+        pocketTimer?.invalidate()
+        pocketTimer = nil
+        pocketMotion.stopAccelerometerUpdates()
+        NotificationCenter.default.removeObserver(
+            self,
+            name: UIDevice.proximityStateDidChangeNotification,
+            object: nil
+        )
+        UIDevice.current.isProximityMonitoringEnabled = proximityWasEnabled
+    }
+
     private func detachArView() {
+        stopPocketWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

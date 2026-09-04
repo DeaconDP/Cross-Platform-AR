@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arArmPocket, arListenPocketSensors } from "./ar-pocket";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -152,7 +153,41 @@ export async function startNativeAR(
     });
     document.body.classList.add("ar-native-active");
     overlay.root.hidden = false;
-    await sessionEnded;
+    const arm = arArmPocket({
+      product: "cubes",
+      poll: async () => {
+        try {
+          return await CubeAR.proximityState();
+        } catch {
+          return null;
+        }
+      },
+      onKind: (kind, coach) => {
+        if (kind === "near" && placed === 0) {
+          overlay.hint.hidden = false;
+          overlay.hint.textContent = coach;
+        }
+      },
+      onExit: (_kind, coach) => {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+        void CubeAR.stopSession();
+      },
+    });
+    const unlisten = arListenPocketSensors((sample) => arm.note(sample));
+    const pocketListener = await CubeAR.addListener("pocketed", (event) => {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent =
+        event.message || "Pocketed — AR closed so the camera does not stay on.";
+      void CubeAR.stopSession();
+    });
+    try {
+      await sessionEnded;
+    } finally {
+      arm.dispose();
+      unlisten();
+      await pocketListener.remove();
+    }
   } finally {
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
