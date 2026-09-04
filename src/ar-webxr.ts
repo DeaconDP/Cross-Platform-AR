@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { armArCast } from "./ar-cast";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -91,6 +92,17 @@ export async function startWebXR(
   const onExit = () => session.end();
   overlay.exit.addEventListener("click", onExit);
 
+  const castHandle = armArCast({
+    product: "cubes",
+    onKind: (_kind, coach) => {
+      if (placed > 0) return;
+      if (coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+      }
+    },
+  });
+
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
@@ -157,6 +169,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  castHandle.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
