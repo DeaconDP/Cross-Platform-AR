@@ -221,6 +221,25 @@ class CubeArPlugin : Plugin() {
         }
     }
 
+    @PluginMethod
+    fun centerTap(call: PluginCall) {
+        bridge.executeOnMainThread {
+            val view = arSceneView
+            if (view == null) {
+                val result = JSObject()
+                result.put("placed", false)
+                result.put("count", placedCount)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
+            val placed = placeCubeAtScreen(view.width / 2f, view.height / 2f, view)
+            val result = JSObject()
+            result.put("placed", placed)
+            result.put("count", placedCount)
+            call.resolve(result)
+        }
+    }
+
     private fun attachArView(onReady: () -> Unit, onFailed: (Exception) -> Unit = {}) {
         detachArView()
 

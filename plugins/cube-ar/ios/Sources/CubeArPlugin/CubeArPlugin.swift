@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "centerTap", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -74,6 +75,18 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             }
 
             let placed = self.placeCube(at: CGPoint(x: CGFloat(x), y: CGFloat(y)), in: view)
+            call.resolve(["placed": placed, "count": self.placedCount])
+        }
+    }
+
+    @objc func centerTap(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let view = self.arView else {
+                call.resolve(["placed": false, "count": self?.placedCount ?? 0])
+                return
+            }
+            let mid = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+            let placed = self.placeCube(at: mid, in: view)
             call.resolve(["placed": placed, "count": self.placedCount])
         }
     }
