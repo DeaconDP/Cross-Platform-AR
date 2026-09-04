@@ -6,6 +6,12 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import {
+  AR_SPEAK_FIND,
+  AR_SPEAK_SURFACE,
+  arSpeakArm,
+  arSpeakWebEngine,
+} from "./ar-speak";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -75,6 +81,8 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const speak = arSpeakArm(arSpeakWebEngine());
+  void speak.say(AR_SPEAK_FIND);
 
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
@@ -85,6 +93,7 @@ export async function startWebXR(
     placed++;
     overlay.count.textContent = String(placed);
     overlay.hint.hidden = true;
+    void speak.say("", { placed: true });
     debug.logEvent(`cube placed (#${placed})`);
   });
 
@@ -94,6 +103,7 @@ export async function startWebXR(
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    speak.dispose();
     unwireDebug();
     unbindSession();
     await session.end();
@@ -124,7 +134,10 @@ export async function startWebXR(
           if (!surfaceFound) {
             surfaceFound = true;
             debug.logEvent("surface found");
-            if (placed === 0) overlay.hint.textContent = "Tap to place a cube";
+            if (placed === 0) {
+              overlay.hint.textContent = "Tap to place a cube";
+              void speak.say(AR_SPEAK_SURFACE);
+            }
           }
         }
       } else {
@@ -157,6 +170,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  speak.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

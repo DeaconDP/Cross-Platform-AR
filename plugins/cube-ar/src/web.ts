@@ -23,4 +23,12 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
   }
+
+  async speechPrefs() {
+    return { muted: false, screenReader: false };
+  }
+
+  async speakCoach(): Promise<void> {}
+
+  async stopSpeak(): Promise<void> {}
 }

@@ -8,6 +8,13 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  AR_SPEAK_FIND,
+  AR_SPEAK_MISS,
+  AR_SPEAK_SURFACE,
+  arSpeakArm,
+  arSpeakBridgeEngine,
+} from "./ar-speak";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -90,11 +97,14 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const speak = arSpeakArm(arSpeakBridgeEngine(CubeAR));
+  void speak.say(AR_SPEAK_FIND);
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
       overlay.hint.textContent = event.message;
+      if (event.state === "ready") void speak.say(AR_SPEAK_SURFACE);
     }
     if (debug.isEnabled()) {
       debug.tickNative({
@@ -125,7 +135,10 @@ export async function startNativeAR(
         placed = result.count;
         overlay.count.textContent = String(placed);
         overlay.hint.hidden = true;
+        void speak.say("", { placed: true });
         debug.logEvent(`cube placed (#${placed})`);
+      } else {
+        void speak.say(AR_SPEAK_MISS);
       }
     } catch {
       debug.logEvent("tap failed");
@@ -157,6 +170,7 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    speak.dispose();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");

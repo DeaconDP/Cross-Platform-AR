@@ -3,6 +3,9 @@ package io.worldbuild.cubear.plugin
 import android.Manifest
 import android.content.Context
 import android.graphics.Color
+import android.media.AudioManager
+import android.speech.tts.TextToSpeech
+import android.view.accessibility.AccessibilityManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -41,6 +44,7 @@ import io.github.sceneview.math.Color as SceneColor
 import io.github.sceneview.math.Direction
 import io.github.sceneview.math.Size
 import io.github.sceneview.node.CubeNode
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -67,6 +71,9 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var pendingSpeak: String? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -218,6 +225,61 @@ class CubeArPlugin : Plugin() {
             result.put("placed", placed)
             result.put("count", placedCount)
             call.resolve(result)
+        }
+    }
+
+    @PluginMethod
+    fun speechPrefs(call: PluginCall) {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val muted = am != null && (
+            am.getStreamVolume(AudioManager.STREAM_MUSIC) <= 0 ||
+                am.ringerMode == AudioManager.RINGER_MODE_SILENT
+            )
+        val acc = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+        val sr = acc?.isEnabled == true && acc.isTouchExplorationEnabled
+        val ret = JSObject()
+        ret.put("muted", muted)
+        ret.put("screenReader", sr)
+        call.resolve(ret)
+    }
+
+    @PluginMethod
+    fun speakCoach(call: PluginCall) {
+        val text = call.getString("text") ?: ""
+        ensureTts()
+        if (text.isEmpty()) {
+            pendingSpeak = null
+            if (ttsReady) tts?.stop()
+            call.resolve()
+            return
+        }
+        if (ttsReady) {
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ar-coach")
+        } else {
+            pendingSpeak = text
+        }
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun stopSpeak(call: PluginCall) {
+        pendingSpeak = null
+        if (ttsReady) tts?.stop()
+        call.resolve()
+    }
+
+    private fun ensureTts() {
+        if (tts != null) return
+        tts = TextToSpeech(context) { status ->
+            ttsReady = status == TextToSpeech.SUCCESS
+            if (ttsReady) {
+                tts?.language = Locale.getDefault()
+                tts?.setSpeechRate(1.05f)
+                pendingSpeak?.let { queued ->
+                    tts?.speak(queued, TextToSpeech.QUEUE_FLUSH, null, "ar-coach")
+                    pendingSpeak = null
+                }
+            }
         }
     }
 
@@ -626,6 +688,8 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        pendingSpeak = null
+        if (ttsReady) tts?.stop()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
@@ -703,6 +767,9 @@ class CubeArPlugin : Plugin() {
     override fun handleOnDestroy() {
         pendingStartCall = null
         detachArView()
+        tts?.shutdown()
+        tts = null
+        ttsReady = false
         super.handleOnDestroy()
     }
 }
