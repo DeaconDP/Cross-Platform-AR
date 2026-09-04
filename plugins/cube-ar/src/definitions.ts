@@ -27,11 +27,19 @@ export interface CubeARTrackingEvent {
   message?: string;
 }
 
+export interface CubeARSpeechPrefs {
+  muted?: boolean;
+  screenReader?: boolean;
+}
+
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  speechPrefs(): Promise<CubeARSpeechPrefs>;
+  speakCoach(options: { text: string }): Promise<void>;
+  stopSpeak(): Promise<void>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,

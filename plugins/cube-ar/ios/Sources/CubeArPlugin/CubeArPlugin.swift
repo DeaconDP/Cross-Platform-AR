@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import Capacitor
 import SceneKit
 import UIKit
@@ -12,6 +13,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "speechPrefs", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "speakCoach", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopSpeak", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +24,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private let speaker = AVSpeechSynthesizer()
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -57,6 +62,37 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async { [weak self] in
             self?.detachArView()
             self?.notifyListeners("sessionEnded", data: [:])
+            call.resolve()
+        }
+    }
+
+    @objc func speechPrefs(_ call: CAPPluginCall) {
+        let muted = AVAudioSession.sharedInstance().outputVolume < 0.01
+        call.resolve([
+            "muted": muted,
+            "screenReader": UIAccessibility.isVoiceOverRunning
+        ])
+    }
+
+    @objc func speakCoach(_ call: CAPPluginCall) {
+        let text = call.getString("text") ?? ""
+        DispatchQueue.main.async {
+            self.speaker.stopSpeaking(at: .immediate)
+            guard !text.isEmpty else {
+                call.resolve()
+                return
+            }
+            let u = AVSpeechUtterance(string: text)
+            u.rate = AVSpeechUtteranceDefaultSpeechRate
+            u.volume = 0.75
+            self.speaker.speak(u)
+            call.resolve()
+        }
+    }
+
+    @objc func stopSpeak(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.speaker.stopSpeaking(at: .immediate)
             call.resolve()
         }
     }
@@ -120,6 +156,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        speaker.stopSpeaking(at: .immediate)
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
