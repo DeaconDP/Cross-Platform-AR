@@ -9,10 +9,13 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.Window
 import android.widget.FrameLayout
+import androidx.appcompat.view.WindowCallbackWrapper
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -67,6 +70,9 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var shutterPreviousCallback: Window.Callback? = null
+    private var shutterHooked = false
+    private var shutterLastFire = 0L
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +154,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startShutterWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -189,6 +196,25 @@ class CubeArPlugin : Plugin() {
             detachArView()
             notifySessionEnded()
             call.resolve()
+        }
+    }
+
+    @PluginMethod
+    fun shutterTap(call: PluginCall) {
+        bridge.executeOnMainThread {
+            val view = arSceneView
+            val result = JSObject()
+            result.put("source", "unknown")
+            if (view == null || view.width <= 0 || view.height <= 0) {
+                result.put("placed", false)
+                result.put("count", placedCount)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
+            val placed = placeCubeAtScreen(view.width / 2f, view.height / 2f, view)
+            result.put("placed", placed)
+            result.put("count", placedCount)
+            call.resolve(result)
         }
     }
 
@@ -625,7 +651,74 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun shutterSource(code: Int): String? = when (code) {
+        KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> "volume"
+        KeyEvent.KEYCODE_HEADSETHOOK,
+        KeyEvent.KEYCODE_MEDIA_PLAY,
+        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+        KeyEvent.KEYCODE_MEDIA_PAUSE,
+        -> "media"
+        KeyEvent.KEYCODE_CAMERA, KeyEvent.KEYCODE_FOCUS -> "camera"
+        else -> null
+    }
+
+    private fun consumeShutter(event: KeyEvent): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount > 0) return false
+        val source = shutterSource(event.keyCode) ?: return false
+        if (arSceneView == null) return false
+        val now = System.currentTimeMillis()
+        if (now - shutterLastFire < 450) return true
+        shutterLastFire = now
+        fireShutter(source)
+        return true
+    }
+
+    private fun fireShutter(source: String) {
+        val view = arSceneView
+        val payload = JSObject()
+        payload.put("source", source)
+        if (view != null && view.width > 0 && view.height > 0) {
+            val placed = placeCubeAtScreen(view.width / 2f, view.height / 2f, view)
+            payload.put("placed", placed)
+            payload.put("count", placedCount)
+        } else {
+            payload.put("placed", false)
+            payload.put("count", placedCount)
+        }
+        notifyListeners("shutter", payload)
+    }
+
+    private fun startShutterWatch() {
+        stopShutterWatch()
+        val w = activity?.window ?: return
+        val current = w.callback
+        shutterPreviousCallback = current
+        w.callback = object : WindowCallbackWrapper(current) {
+            override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                if (consumeShutter(event)) return true
+                return super.dispatchKeyEvent(event)
+            }
+        }
+        shutterHooked = true
+        shutterLastFire = 0
+    }
+
+    private fun stopShutterWatch() {
+        if (!shutterHooked) {
+            shutterPreviousCallback = null
+            return
+        }
+        val w = activity?.window
+        if (w != null && w.callback is WindowCallbackWrapper) {
+            w.callback = shutterPreviousCallback
+        }
+        shutterPreviousCallback = null
+        shutterHooked = false
+        shutterLastFire = 0
+    }
+
     private fun detachArView() {
+        stopShutterWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
