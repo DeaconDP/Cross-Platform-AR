@@ -1,5 +1,7 @@
 import ARKit
+import AVFoundation
 import Capacitor
+import CoreHaptics
 import SceneKit
 import UIKit
 
@@ -12,6 +14,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "hapticPrefs", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -58,6 +62,42 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.detachArView()
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
+        }
+    }
+
+    @objc func haptic(_ call: CAPPluginCall) {
+        let kind = call.getString("kind") ?? "place"
+        DispatchQueue.main.async {
+            self.playHaptic(kind)
+            call.resolve()
+        }
+    }
+
+    @objc func hapticPrefs(_ call: CAPPluginCall) {
+        let vol = AVAudioSession.sharedInstance().outputVolume
+        var enabled = true
+        if #available(iOS 13.0, *) {
+            enabled = CHHapticEngine.capabilitiesForHardware().supportsHaptics
+        }
+        call.resolve(["enabled": enabled, "muted": vol < 0.02])
+    }
+
+    private func playHaptic(_ kind: String) {
+        switch kind {
+        case "miss":
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        case "error":
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+        case "place":
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        case "lift":
+            if #available(iOS 13.0, *) {
+                UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+            } else {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
+        default:
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
     }
 

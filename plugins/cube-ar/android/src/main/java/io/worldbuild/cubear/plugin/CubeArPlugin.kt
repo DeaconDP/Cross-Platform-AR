@@ -3,6 +3,10 @@ package io.worldbuild.cubear.plugin
 import android.Manifest
 import android.content.Context
 import android.graphics.Color
+import android.media.AudioManager
+import android.os.Build
+import android.provider.Settings
+import android.view.HapticFeedbackConstants
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -190,6 +194,50 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun haptic(call: PluginCall) {
+        val kind = call.getString("kind") ?: "place"
+        bridge.executeOnMainThread {
+            playHaptic(kind)
+            call.resolve()
+        }
+    }
+
+    @PluginMethod
+    fun hapticPrefs(call: PluginCall) {
+        var enabled = true
+        try {
+            enabled = Settings.System.getInt(
+                context.contentResolver,
+                Settings.System.HAPTIC_FEEDBACK_ENABLED,
+                1,
+            ) == 1
+        } catch (_: Exception) {
+            /* default on */
+        }
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val muted = am != null && am.ringerMode != AudioManager.RINGER_MODE_NORMAL
+        val ret = JSObject()
+        ret.put("enabled", enabled)
+        ret.put("muted", muted)
+        call.resolve(ret)
+    }
+
+    private fun playHaptic(kind: String) {
+        val view = bridge?.webView ?: return
+        val code = when (kind) {
+            "miss", "error" ->
+                if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.REJECT
+                else HapticFeedbackConstants.LONG_PRESS
+            "place" ->
+                if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM
+                else HapticFeedbackConstants.VIRTUAL_KEY
+            "lift" -> HapticFeedbackConstants.CONTEXT_CLICK
+            else -> HapticFeedbackConstants.CLOCK_TICK
+        }
+        view.performHapticFeedback(code, HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING)
     }
 
     @PluginMethod

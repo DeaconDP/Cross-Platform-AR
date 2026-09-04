@@ -12,4 +12,8 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async haptic() { }
+    async hapticPrefs() {
+        return { enabled: true, muted: false };
+    }
 }

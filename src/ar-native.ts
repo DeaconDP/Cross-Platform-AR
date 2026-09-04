@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arArmHaptic, type ArHapticPrefs } from "./ar-haptic";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -87,12 +88,28 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  let prefs: ArHapticPrefs = {};
+  const haptic = arArmHaptic({
+    product: "cubes",
+    playNative: (kind) => CubeAR.haptic({ kind }),
+    prefs: () => prefs,
+    onCoach: (coach, kind) => {
+      if (kind === "miss" && placed === 0) overlay.hint.textContent = coach;
+    },
+  });
+  void CubeAR.hapticPrefs()
+    .then((next) => {
+      prefs = { enabled: next.enabled, muted: next.muted };
+    })
+    .catch(() => undefined);
+
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
+    if (event.state === "ready" && placed === 0) haptic.play("surface");
     if (event.message && placed === 0) {
       overlay.hint.textContent = event.message;
     }
@@ -122,12 +139,16 @@ export async function startNativeAR(
         y: event.clientY * dpr,
       });
       if (result.placed) {
+        haptic.play("place");
         placed = result.count;
         overlay.count.textContent = String(placed);
         overlay.hint.hidden = true;
         debug.logEvent(`cube placed (#${placed})`);
+      } else {
+        haptic.play("miss");
       }
     } catch {
+      haptic.play("miss");
       debug.logEvent("tap failed");
     }
   };
@@ -158,6 +179,7 @@ export async function startNativeAR(
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
+    haptic.dispose();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();
