@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import Capacitor
 import SceneKit
 import UIKit
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "shutterTap", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var volumeObservation: NSKeyValueObservation?
+    private var shutterLastFire: TimeInterval = 0
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -58,6 +62,17 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.detachArView()
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
+        }
+    }
+
+    @objc func shutterTap(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let view = self.arView else {
+                call.resolve(["placed": false, "count": self?.placedCount ?? 0, "source": "unknown"])
+                return
+            }
+            let placed = self.placeCube(at: CGPoint(x: view.bounds.midX, y: view.bounds.midY), in: view)
+            call.resolve(["placed": placed, "count": self.placedCount, "source": "unknown"])
         }
     }
 
@@ -107,6 +122,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startShutterWatch()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -119,7 +135,43 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func startShutterWatch() {
+        stopShutterWatch()
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.ambient, options: [.mixWithOthers])
+        try? session.setActive(true)
+        shutterLastFire = 0
+        volumeObservation = session.observe(\.outputVolume, options: [.old, .new]) { [weak self] _, change in
+            guard let self else { return }
+            let old = change.oldValue ?? session.outputVolume
+            let new = change.newValue ?? session.outputVolume
+            guard abs(new - old) > 0.001 else { return }
+            let now = Date().timeIntervalSince1970
+            if now - self.shutterLastFire < 0.45 { return }
+            self.shutterLastFire = now
+            DispatchQueue.main.async {
+                guard let view = self.arView else {
+                    self.notifyListeners("shutter", data: ["source": "volume", "placed": false, "count": self.placedCount])
+                    return
+                }
+                let placed = self.placeCube(at: CGPoint(x: view.bounds.midX, y: view.bounds.midY), in: view)
+                self.notifyListeners("shutter", data: [
+                    "source": "volume",
+                    "placed": placed,
+                    "count": self.placedCount,
+                ])
+            }
+        }
+    }
+
+    private func stopShutterWatch() {
+        volumeObservation?.invalidate()
+        volumeObservation = nil
+        shutterLastFire = 0
+    }
+
     private func detachArView() {
+        stopShutterWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

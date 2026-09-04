@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arShutterArm, arShutterCoach } from "./ar-shutter";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -74,9 +75,9 @@ export async function startWebXR(
   let placed = 0;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
-  overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.hint.textContent = arShutterCoach({ kind: "cubes" }) ?? "Move your phone to find a surface";
 
-  session.addEventListener("select", () => {
+  const placeOnReticle = () => {
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
@@ -86,6 +87,17 @@ export async function startWebXR(
     overlay.count.textContent = String(placed);
     overlay.hint.hidden = true;
     debug.logEvent(`cube placed (#${placed})`);
+  };
+
+  session.addEventListener("select", () => {
+    placeOnReticle();
+  });
+
+  const shutter = arShutterArm({
+    kind: "cubes",
+    onShutter: () => {
+      placeOnReticle();
+    },
   });
 
   const onExit = () => session.end();
@@ -124,7 +136,10 @@ export async function startWebXR(
           if (!surfaceFound) {
             surfaceFound = true;
             debug.logEvent("surface found");
-            if (placed === 0) overlay.hint.textContent = "Tap to place a cube";
+            if (placed === 0) {
+              overlay.hint.textContent =
+                arShutterCoach({ kind: "cubes" }) ?? "Tap to place a cube";
+            }
           }
         }
       } else {
@@ -157,6 +172,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  shutter.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arShutterArm, arShutterCoach } from "./ar-shutter";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -89,7 +90,7 @@ export async function startNativeAR(
   let placed = 0;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
-  overlay.hint.textContent = "Move your phone to find a surface";
+    overlay.hint.textContent = arShutterCoach({ kind: "cubes" }) ?? "Move your phone to find a surface";
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -134,6 +135,32 @@ export async function startNativeAR(
 
   document.addEventListener("pointerdown", onTap);
 
+  const noteShutterPlace = (result: { placed: boolean; count: number }) => {
+    if (!result.placed) return;
+    placed = result.count;
+    overlay.count.textContent = String(placed);
+    overlay.hint.hidden = true;
+    debug.logEvent(`cube placed (#${placed})`);
+  };
+
+  const shutter = arShutterArm({
+    kind: "cubes",
+    onShutter: () => {
+      void CubeAR.shutterTap()
+        .then(noteShutterPlace)
+        .catch(() => {
+          const dpr = window.devicePixelRatio || 1;
+          void CubeAR.onScreenTap({
+            x: (window.innerWidth / 2) * dpr,
+            y: (window.innerHeight / 2) * dpr,
+          }).then(noteShutterPlace);
+        });
+    },
+  });
+  const shutterListener = await CubeAR.addListener("shutter", (event) => {
+    noteShutterPlace(event);
+  });
+
   const onExit = async () => {
     overlay.exit.disabled = true;
     try {
@@ -155,6 +182,8 @@ export async function startNativeAR(
     await sessionEnded;
   } finally {
     document.removeEventListener("pointerdown", onTap);
+    shutter.dispose();
+    await shutterListener.remove();
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
