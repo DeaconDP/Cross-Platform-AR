@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arArmMag, arListenMagSensors } from "./ar-mag";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -90,11 +91,29 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  let defaultHint = "Move your phone to find a surface";
+
+  const magArm = arArmMag({
+    product: "cubes",
+    poll: async () => {
+      try {
+        return await CubeAR.magState();
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = kind === "ok" ? defaultHint : coach;
+    },
+  });
+  const magUnlisten = arListenMagSensors((sample) => magArm.note(sample));
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
-      overlay.hint.textContent = event.message;
+      defaultHint = event.message;
+      if (magArm.kind() === "ok") overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
       debug.tickNative({
@@ -157,6 +176,8 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    magArm.dispose();
+    magUnlisten();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
