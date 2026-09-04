@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { arArmContrast } from "./ar-contrast";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -132,6 +133,16 @@ export async function startNativeAR(
     }
   };
 
+  const stopContrast = arArmContrast({
+    getNative: async () => {
+      try {
+        return await CubeAR.displayPrefs();
+      } catch {
+        return null;
+      }
+    },
+  });
+
   document.addEventListener("pointerdown", onTap);
 
   const onExit = async () => {
@@ -157,6 +168,7 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    stopContrast();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");

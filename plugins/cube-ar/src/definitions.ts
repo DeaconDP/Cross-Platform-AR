@@ -27,11 +27,18 @@ export interface CubeARTrackingEvent {
   message?: string;
 }
 
+export interface CubeARDisplayPrefs {
+  highContrast: boolean;
+  reduceTransparency: boolean;
+  differentiateWithoutColor: boolean;
+}
+
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  displayPrefs(): Promise<CubeARDisplayPrefs>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
