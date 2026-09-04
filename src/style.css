@@ -223,6 +223,24 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+html.is-ar-contrast .ar-hint,
+html.is-ar-contrast .ar-chip {
+  background: #0b0d10;
+  backdrop-filter: none;
+  color: #fff;
+}
+
+html.is-ar-contrast-opaque .ar-hint,
+html.is-ar-contrast-opaque .ar-chip,
+html.is-ar-contrast-opaque .ar-exit {
+  outline: 2px solid #fff;
+}
+
+html.is-ar-contrast-boost .ar-exit {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;

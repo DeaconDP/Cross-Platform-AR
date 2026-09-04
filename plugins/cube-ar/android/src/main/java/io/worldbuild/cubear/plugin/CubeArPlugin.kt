@@ -2,6 +2,7 @@ package io.worldbuild.cubear.plugin
 
 import android.Manifest
 import android.content.Context
+import android.provider.Settings
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -78,6 +79,27 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+    }
+
+    @PluginMethod
+    fun displayPrefs(call: PluginCall) {
+        val cr = context.contentResolver
+        val high = try {
+            Settings.Secure.getInt(cr, "high_text_contrast_enabled", 0) == 1 ||
+                Settings.Secure.getInt(cr, "accessibility_high_text_contrast_enabled", 0) == 1
+        } catch (_: Exception) {
+            false
+        }
+        val reduce = try {
+            Settings.Secure.getInt(cr, "accessibility_reduce_transparency", 0) == 1
+        } catch (_: Exception) {
+            false
+        }
+        val result = JSObject()
+        result.put("highContrast", high)
+        result.put("reduceTransparency", reduce)
+        result.put("differentiateWithoutColor", false)
+        call.resolve(result)
     }
 
     @PluginMethod

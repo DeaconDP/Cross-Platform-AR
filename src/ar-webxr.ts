@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { arArmContrast } from "./ar-contrast";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -90,7 +91,8 @@ export async function startWebXR(
 
   const onExit = () => session.end();
   overlay.exit.addEventListener("click", onExit);
-
+  const stopContrast = arArmContrast();
+  try {
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
@@ -163,4 +165,7 @@ export async function startWebXR(
   renderer.setAnimationLoop(null);
   renderer.domElement.remove();
   renderer.dispose();
+  } finally {
+    stopContrast();
+  }
 }

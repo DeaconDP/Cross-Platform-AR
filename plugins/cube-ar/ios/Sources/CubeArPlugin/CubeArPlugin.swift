@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "displayPrefs", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -26,6 +27,22 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve([
             "supported": supported,
             "backend": supported ? "arkit" : "none",
+        ])
+    }
+
+    @objc func displayPrefs(_ call: CAPPluginCall) {
+        var high = false
+        var reduce = false
+        var diff = false
+        if #available(iOS 13.0, *) {
+            high = UIAccessibility.isDarkerSystemColorsEnabled
+            reduce = UIAccessibility.isReduceTransparencyEnabled
+            diff = UIAccessibility.shouldDifferentiateWithoutColor
+        }
+        call.resolve([
+            "highContrast": high,
+            "reduceTransparency": reduce,
+            "differentiateWithoutColor": diff
         ])
     }
 

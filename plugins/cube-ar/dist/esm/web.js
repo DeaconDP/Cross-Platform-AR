@@ -12,4 +12,11 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async displayPrefs() {
+        return {
+            highContrast: false,
+            reduceTransparency: false,
+            differentiateWithoutColor: false,
+        };
+    }
 }
