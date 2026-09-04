@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arShakeArm, arShakeCoach } from "./ar-shake";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -72,9 +73,33 @@ export async function startWebXR(
   const unbindSession = debug.bindSession(session);
 
   let placed = 0;
+  const cubes: THREE.Object3D[] = [];
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+
+  const applyCount = () => {
+    overlay.count.textContent = String(placed);
+    overlay.hint.hidden = false;
+    overlay.hint.textContent =
+      placed > 0
+        ? (arShakeCoach({ placed: true, kind: "cubes" }) ?? "Tap to place a cube")
+        : "Move your phone to find a surface";
+  };
+
+  const shake = arShakeArm({
+    kind: "cubes",
+    canLift: () => placed > 0,
+    onLift: () => {
+      const last = cubes.pop();
+      if (!last) return;
+      scene.remove(last);
+      placed = cubes.length;
+      applyCount();
+      debug.logEvent(`cube lifted (now ${placed})`);
+    },
+  });
+  shake.notePlaced(false);
 
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
@@ -82,9 +107,10 @@ export async function startWebXR(
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
     cube.rotateY(Math.random() * Math.PI * 2);
     scene.add(cube);
-    placed++;
-    overlay.count.textContent = String(placed);
-    overlay.hint.hidden = true;
+    cubes.push(cube);
+    placed = cubes.length;
+    applyCount();
+    shake.notePlaced(true);
     debug.logEvent(`cube placed (#${placed})`);
   });
 
@@ -156,6 +182,7 @@ export async function startWebXR(
     session.addEventListener("end", () => resolve(), { once: true });
   });
 
+  shake.dispose();
   overlay.exit.removeEventListener("click", onExit);
   unwireDebug();
   unbindSession();

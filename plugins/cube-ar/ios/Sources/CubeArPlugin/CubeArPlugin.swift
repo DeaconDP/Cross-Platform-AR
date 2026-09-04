@@ -1,5 +1,6 @@
 import ARKit
 import Capacitor
+import CoreMotion
 import SceneKit
 import UIKit
 
@@ -12,6 +13,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "shakeState", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "liftLast", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +23,19 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var cubeNodes: [SCNNode] = []
+    private let motion = CMMotionManager()
+    private var lastAx: Double = 0
+    private var lastAy: Double = 0
+    private var lastAz: Double = 0
+    private var lastShaking = false
+    private var shakeCrossings = 0
+    private var shakeLastSign = 0
+    private var shakeWindowStart: TimeInterval = 0
+    private var shakeLastFire: TimeInterval = 0
+    private let shakePeak: Double = 3.2
+    private let shakeWindow: TimeInterval = 0.65
+    private let shakeCooldown: TimeInterval = 1.4
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -58,6 +74,26 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.detachArView()
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
+        }
+    }
+
+    @objc func shakeState(_ call: CAPPluginCall) {
+        call.resolve([
+            "shaking": lastShaking,
+            "ax": lastAx,
+            "ay": lastAy,
+            "az": lastAz,
+        ])
+    }
+
+    @objc func liftLast(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                call.resolve(["lifted": false, "count": 0])
+                return
+            }
+            let lifted = self.removeLastCube()
+            call.resolve(["lifted": lifted, "count": self.placedCount])
         }
     }
 
@@ -107,6 +143,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startShakeWatch()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +157,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopShakeWatch()
+        cubeNodes.removeAll()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
@@ -153,8 +192,73 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         node.eulerAngles.y = Float.random(in: 0...(2 * Float.pi))
 
         view.scene.rootNode.addChildNode(node)
-        placedCount += 1
+        cubeNodes.append(node)
+        placedCount = cubeNodes.count
         return true
+    }
+
+    private func removeLastCube() -> Bool {
+        guard let last = cubeNodes.popLast() else { return false }
+        last.removeFromParentNode()
+        placedCount = cubeNodes.count
+        return true
+    }
+
+    private func startShakeWatch() {
+        stopShakeWatch()
+        guard motion.isDeviceMotionAvailable else { return }
+        motion.deviceMotionUpdateInterval = 0.05
+        motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] data, _ in
+            guard let self, let ua = data?.userAcceleration else { return }
+            self.tickShake(ax: ua.x * 9.81, ay: ua.y * 9.81, az: ua.z * 9.81)
+        }
+    }
+
+    private func stopShakeWatch() {
+        if motion.isDeviceMotionActive { motion.stopDeviceMotionUpdates() }
+        lastAx = 0
+        lastAy = 0
+        lastAz = 0
+        lastShaking = false
+        shakeCrossings = 0
+        shakeLastSign = 0
+        shakeWindowStart = 0
+        shakeLastFire = 0
+    }
+
+    private func tickShake(ax: Double, ay: Double, az: Double) {
+        lastAx = ax
+        lastAy = ay
+        lastAz = az
+        let mag = (ax * ax + ay * ay + az * az).squareRoot()
+        lastShaking = mag >= shakePeak
+        let now = Date().timeIntervalSince1970
+        if now - shakeLastFire < shakeCooldown { return }
+        if now - shakeWindowStart > shakeWindow {
+            shakeCrossings = 0
+            shakeLastSign = 0
+            shakeWindowStart = now
+        }
+        if lastShaking {
+            let axa = abs(ax), aya = abs(ay), aza = abs(az)
+            var sign = 0
+            if axa >= aya && axa >= aza { sign = ax == 0 ? 0 : (ax > 0 ? 1 : -1) }
+            else if aya >= aza { sign = ay == 0 ? 0 : (ay > 0 ? 1 : -1) }
+            else { sign = az == 0 ? 0 : (az > 0 ? 1 : -1) }
+            if sign != 0 && shakeLastSign != 0 && sign != shakeLastSign {
+                shakeCrossings += 1
+            }
+            if sign != 0 { shakeLastSign = sign }
+        }
+        if shakeCrossings >= 1 {
+            shakeCrossings = 0
+            shakeLastSign = 0
+            shakeWindowStart = now
+            shakeLastFire = now
+            if removeLastCube() {
+                notifyListeners("shook", data: ["lifted": true, "count": placedCount])
+            }
+        }
     }
 
     private func updateReticle(in view: ARSCNView, frame: ARFrame) {

@@ -23,4 +23,12 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
   }
+
+  async shakeState() {
+    return { shaking: false, ax: 0, ay: 0, az: 0 };
+  }
+
+  async liftLast() {
+    return { lifted: false, count: 0 };
+  }
 }
