@@ -2,7 +2,11 @@ package io.worldbuild.cubear.plugin
 
 import android.Manifest
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.util.Base64
+import android.view.PixelCopy
+import java.io.ByteArrayOutputStream
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -189,6 +193,58 @@ class CubeArPlugin : Plugin() {
             detachArView()
             notifySessionEnded()
             call.resolve()
+        }
+    }
+
+    @PluginMethod
+    fun snapshot(call: PluginCall) {
+        activity?.runOnUiThread { copyArView(call) } ?: run {
+            val ret = JSObject()
+            ret.put("ok", false)
+            ret.put("reason", "not-ready")
+            call.resolve(ret)
+        }
+    }
+
+    private fun copyArView(call: PluginCall) {
+        val view = arSceneView
+        if (view == null || view.width <= 0 || view.height <= 0) {
+            val ret = JSObject()
+            ret.put("ok", false)
+            ret.put("reason", "not-ready")
+            call.resolve(ret)
+            return
+        }
+        val bmp = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        try {
+            PixelCopy.request(
+                view,
+                bmp,
+                { result ->
+                    val ret = JSObject()
+                    if (result != PixelCopy.SUCCESS) {
+                        bmp.recycle()
+                        ret.put("ok", false)
+                        ret.put("reason", "fail")
+                        call.resolve(ret)
+                        return@request
+                    }
+                    val out = ByteArrayOutputStream()
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 82, out)
+                    bmp.recycle()
+                    ret.put("ok", true)
+                    ret.put("mime", "image/jpeg")
+                    ret.put("data", Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
+                    call.resolve(ret)
+                },
+                Handler(Looper.getMainLooper()),
+            )
+        } catch (_: Exception) {
+            bmp.recycle()
+            val ret = JSObject()
+            ret.put("ok", false)
+            ret.put("reason", "fail")
+            call.resolve(ret)
         }
     }
 

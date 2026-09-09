@@ -6,6 +6,14 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import {
+  arCanSnap,
+  arCanvasToBlob,
+  arShareSnap,
+  arSnapDoneCoach,
+  arSnapFilename,
+  arSnapTitle,
+} from "./ar-snap";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -23,6 +31,7 @@ export interface OverlayElements {
   exit: HTMLButtonElement;
   debugToggle: HTMLButtonElement;
   debugPanel: HTMLElement;
+  snap: HTMLButtonElement;
 }
 
 /**
@@ -72,9 +81,12 @@ export async function startWebXR(
   const unbindSession = debug.bindSession(session);
 
   let placed = 0;
+  let snapBusy = false;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.snap.hidden = true;
+  overlay.snap.disabled = false;
 
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
@@ -85,15 +97,57 @@ export async function startWebXR(
     placed++;
     overlay.count.textContent = String(placed);
     overlay.hint.hidden = true;
+    overlay.snap.hidden = placed < 1;
     debug.logEvent(`cube placed (#${placed})`);
   });
 
   const onExit = () => session.end();
+  const onSnap = async () => {
+    if (snapBusy) return;
+    const gate = arCanSnap({ ready: placed > 0, busy: snapBusy });
+    if (gate !== "ok") {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = arSnapDoneCoach(gate) || "Place a cube first, then save a photo.";
+      return;
+    }
+    snapBusy = true;
+    overlay.snap.disabled = true;
+    overlay.snap.setAttribute("aria-busy", "true");
+    overlay.hint.hidden = false;
+    overlay.hint.textContent = arSnapDoneCoach("busy");
+    try {
+      const blob = await arCanvasToBlob(renderer.domElement);
+      if (!blob) {
+        overlay.hint.textContent = arSnapDoneCoach("empty");
+        return;
+      }
+      const reason = await arShareSnap({
+        blob,
+        filename: arSnapFilename("cubes"),
+        title: arSnapTitle("cubes"),
+      });
+      if (reason === "denied") {
+        overlay.hint.hidden = true;
+        return;
+      }
+      overlay.hint.textContent = arSnapDoneCoach(reason);
+    } catch {
+      overlay.hint.textContent = arSnapDoneCoach("fail");
+    } finally {
+      snapBusy = false;
+      overlay.snap.disabled = false;
+      overlay.snap.removeAttribute("aria-busy");
+    }
+  };
   overlay.exit.addEventListener("click", onExit);
+  overlay.snap.addEventListener("click", onSnap);
 
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    overlay.exit.removeEventListener("click", onExit);
+    overlay.snap.removeEventListener("click", onSnap);
+    overlay.snap.hidden = true;
     unwireDebug();
     unbindSession();
     await session.end();
@@ -157,6 +211,9 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  overlay.snap.removeEventListener("click", onSnap);
+  overlay.snap.hidden = true;
+  overlay.snap.disabled = false;
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

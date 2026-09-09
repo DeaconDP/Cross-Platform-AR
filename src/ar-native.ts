@@ -2,6 +2,15 @@ import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
+  arBlobFromBase64,
+  arCanSnap,
+  arParseSnapResult,
+  arShareSnap,
+  arSnapDoneCoach,
+  arSnapFilename,
+  arSnapTitle,
+} from "./ar-snap";
+import {
   type CompatSnapshot,
   DebugCollector,
   resetDebugOverlay,
@@ -87,9 +96,12 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  let snapBusy = false;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.snap.hidden = true;
+  overlay.snap.disabled = false;
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -112,7 +124,7 @@ export async function startNativeAR(
 
   const onTap = async (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
-    if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    if (target?.closest(".ar-exit, .ar-snap, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
@@ -125,6 +137,7 @@ export async function startNativeAR(
         placed = result.count;
         overlay.count.textContent = String(placed);
         overlay.hint.hidden = true;
+        overlay.snap.hidden = placed < 1;
         debug.logEvent(`cube placed (#${placed})`);
       }
     } catch {
@@ -142,6 +155,44 @@ export async function startNativeAR(
       // session may already be torn down
     }
   };
+  const onSnap = async () => {
+    if (snapBusy) return;
+    const gate = arCanSnap({ ready: placed > 0, busy: snapBusy });
+    if (gate !== "ok") {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = arSnapDoneCoach(gate) || "Place a cube first, then save a photo.";
+      return;
+    }
+    snapBusy = true;
+    overlay.snap.disabled = true;
+    overlay.snap.setAttribute("aria-busy", "true");
+    overlay.hint.hidden = false;
+    overlay.hint.textContent = arSnapDoneCoach("busy");
+    try {
+      const parsed = arParseSnapResult(await CubeAR.snapshot());
+      if (!parsed.ok) {
+        overlay.hint.textContent = arSnapDoneCoach(parsed.reason);
+        return;
+      }
+      const reason = await arShareSnap({
+        blob: arBlobFromBase64(parsed.data, parsed.mime),
+        filename: arSnapFilename("cubes"),
+        title: arSnapTitle("cubes"),
+      });
+      if (reason === "denied") {
+        overlay.hint.hidden = true;
+        return;
+      }
+      overlay.hint.textContent = arSnapDoneCoach(reason);
+    } catch {
+      overlay.hint.textContent = arSnapDoneCoach("fail");
+    } finally {
+      snapBusy = false;
+      overlay.snap.disabled = false;
+      overlay.snap.removeAttribute("aria-busy");
+    }
+  };
+  overlay.snap.addEventListener("click", onSnap);
   overlay.exit.addEventListener("click", onExit);
 
   try {
@@ -156,7 +207,10 @@ export async function startNativeAR(
   } finally {
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
+    overlay.snap.removeEventListener("click", onSnap);
     overlay.exit.disabled = false;
+    overlay.snap.hidden = true;
+    overlay.snap.disabled = false;
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");

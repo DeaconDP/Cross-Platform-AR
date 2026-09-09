@@ -19,6 +19,7 @@ const overlay = {
   exit: $<HTMLButtonElement>("exit-ar"),
   debugToggle: $<HTMLButtonElement>("debug-toggle"),
   debugPanel: $("debug-panel"),
+  snap: $<HTMLButtonElement>("save-ar"),
 };
 
 startPreview($("preview"));
