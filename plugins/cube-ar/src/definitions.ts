@@ -27,11 +27,19 @@ export interface CubeARTrackingEvent {
   message?: string;
 }
 
+export interface CubeARPaceState {
+  dtMs: number;
+  fps: number;
+  level: string;
+  lowFx: boolean;
+}
+
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  paceState(): Promise<CubeARPaceState>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +47,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "paceChanged",
+    listenerFunc: (event: CubeARPaceState) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "paceState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var lastPaceTime: TimeInterval = 0
+    private var paceEma: Double = -1
+    private var paceLevel = "ok"
+    private var paceLowFx = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -61,6 +66,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func paceState(_ call: CAPPluginCall) {
+        call.resolve(pacePayload())
+    }
+
     @objc func onScreenTap(_ call: CAPPluginCall) {
         guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
             call.reject("Missing tap coordinates")
@@ -93,7 +102,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         view.delegate = self
         view.session.delegate = self
         view.automaticallyUpdatesLighting = true
+        view.preferredFramesPerSecond = 60
         view.antialiasingMode = .multisampling4X
+        resetPace()
 
         if let superview = webView.superview {
             superview.insertSubview(view, belowSubview: webView)
@@ -125,6 +136,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView = nil
         reticleNode = nil
         surfaceFound = false
+        resetPace()
 
         bridge?.webView.isOpaque = true
         bridge?.webView.backgroundColor = .white
@@ -188,7 +200,41 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 }
 
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
+    private func pacePayload() -> [String: Any] {
+        [
+            "dtMs": paceEma,
+            "fps": paceEma > 0 ? 1000 / paceEma : 0,
+            "level": paceLevel,
+            "lowFx": paceLowFx,
+        ]
+    }
+
+    private func resetPace() {
+        lastPaceTime = 0
+        paceEma = -1
+        paceLevel = "ok"
+        paceLowFx = false
+    }
+
+    private func notePace(at time: TimeInterval) {
+        if lastPaceTime > 0 {
+            let dt = (time - lastPaceTime) * 1000
+            if dt > 0 && dt < 250 {
+                paceEma = paceEma < 0 ? dt : paceEma * 0.85 + dt * 0.15
+                let next = paceEma < 22 ? "ok" : paceEma < 36 ? "slow" : "jank"
+                if next != paceLevel {
+                    paceLevel = next
+                    paceLowFx = next != "ok"
+                    arView?.antialiasingMode = paceLowFx ? .none : .multisampling4X
+                    notifyListeners("paceChanged", data: pacePayload())
+                }
+            }
+        }
+        lastPaceTime = time
+    }
+
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+        notePace(at: time)
         guard let view = arView, let frame = view.session.currentFrame else { return }
         DispatchQueue.main.async { [weak self] in
             self?.updateReticle(in: view, frame: frame)

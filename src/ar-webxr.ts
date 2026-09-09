@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { arArmPace } from "./ar-pace";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -41,7 +42,8 @@ export async function startWebXR(
   });
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(window.devicePixelRatio);
+  let pixelCap = 2;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, pixelCap));
   renderer.xr.enabled = true;
   renderer.xr.setReferenceSpaceType("local");
   document.body.appendChild(renderer.domElement);
@@ -76,6 +78,15 @@ export async function startWebXR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const pace = arArmPace({
+    product: "cubes",
+    onChange: (judge) => {
+      pixelCap = judge.pixelRatio;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, pixelCap));
+      if (placed === 0 && judge.coach) overlay.hint.textContent = judge.coach;
+    },
+  });
+
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
     const cube = createCube();
@@ -94,6 +105,7 @@ export async function startWebXR(
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    pace.dispose();
     unwireDebug();
     unbindSession();
     await session.end();
@@ -157,6 +169,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  pace.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

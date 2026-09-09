@@ -1,6 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
-import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
+import { CUBE_COLOR_HEX, CUBE_SIZE, setPreviewPixelRatio, startPreview, stopPreview } from "./scene";
+import { arArmPace } from "./ar-pace";
 import {
   type CompatSnapshot,
   DebugCollector,
@@ -91,9 +92,27 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const pace = arArmPace({
+    product: "cubes",
+    getNative: async () => {
+      try {
+        return await CubeAR.paceState();
+      } catch {
+        return null;
+      }
+    },
+    onChange: (judge) => {
+      if (placed === 0 && judge.coach) overlay.hint.textContent = judge.coach;
+      setPreviewPixelRatio(judge.pixelRatio);
+    },
+  });
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    const paceCoach = pace.snapshot().coach;
+    if (paceCoach && placed === 0) {
+      overlay.hint.textContent = paceCoach;
+    } else if (event.message && placed === 0) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
@@ -104,6 +123,10 @@ export async function startNativeAR(
         backend: snapshot.platform === "ios" ? "arkit" : "arcore",
       });
     }
+  });
+
+  const paceListener = await CubeAR.addListener("paceChanged", (event) => {
+    pace.pushNative(event);
   });
 
   const sessionEnded = new Promise<void>((resolve) => {
@@ -158,6 +181,8 @@ export async function startNativeAR(
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
+    paceListener.remove();
+    pace.dispose();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();
