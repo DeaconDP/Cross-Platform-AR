@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async sparseState() {
+        return { points: -1, planes: 0, level: "ok" };
+    }
 }

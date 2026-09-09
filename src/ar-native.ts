@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { arArmSparse } from "./ar-sparse";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -90,12 +91,36 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const defaultHint = "Move your phone to find a surface";
+
+  const sparse = arArmSparse({
+    product: "cubes",
+    getNative: async () => {
+      try {
+        return await CubeAR.sparseState();
+      } catch {
+        return null;
+      }
+    },
+    onChange: (judge) => {
+      if (placed > 0 && !judge.coach) {
+        overlay.hint.hidden = true;
+        return;
+      }
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = judge.coach || defaultHint;
+    },
+  });
+
+  const sparseListener = await CubeAR.addListener("sparseChanged", (event) => {
+    sparse.pushNative(event);
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
-      overlay.hint.textContent = event.message;
-    }
+    if (event.message && placed === 0 && !sparse.snapshot().coach) {
+        overlay.hint.textContent = event.message;
+      }
     if (debug.isEnabled()) {
       debug.tickNative({
         tracking: event.state,
@@ -124,7 +149,8 @@ export async function startNativeAR(
       if (result.placed) {
         placed = result.count;
         overlay.count.textContent = String(placed);
-        overlay.hint.hidden = true;
+        sparse.setPlaced(true);
+        if (!sparse.snapshot().coach) overlay.hint.hidden = true;
         debug.logEvent(`cube placed (#${placed})`);
       }
     } catch {
@@ -157,7 +183,9 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    sparse.dispose();
     trackingListener.remove();
+    sparseListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();
