@@ -3,6 +3,7 @@ package io.worldbuild.cubear.plugin
 import android.Manifest
 import android.content.Context
 import android.graphics.Color
+import android.media.Image
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -28,6 +29,7 @@ import com.getcapacitor.annotation.PermissionCallback
 import com.getcapacitor.Logger
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
+import com.google.ar.core.Frame
 import com.google.ar.core.HitResult
 import com.google.ar.core.Plane
 import com.google.ar.core.TrackingState
@@ -67,6 +69,11 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var lastLensMs = 0L
+    private var lensMean = -1f
+    private var lensVar = -1f
+    private var lensBlocked = false
+    private var lastLensLevel = "ok"
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -183,6 +190,11 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun lensState(call: PluginCall) {
+        call.resolve(lensPayload())
+    }
+
+    @PluginMethod
     fun stopSession(call: PluginCall) {
         pendingStartCall = null
         bridge.executeOnMainThread {
@@ -204,6 +216,14 @@ class CubeArPlugin : Plugin() {
         }
 
         bridge.executeOnMainThread {
+            if (lensBlocked) {
+                val result = JSObject()
+                result.put("placed", false)
+                result.put("count", placedCount)
+                result.put("covered", true)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
             val view = arSceneView
             if (view == null) {
                 val result = JSObject()
@@ -309,6 +329,7 @@ class CubeArPlugin : Plugin() {
                     sessionFrameReceived = true
                     cancelSessionWatchdog()
                 }
+                sampleLens(frame)
                 val tracking = frame.camera.trackingState
                 updateReticle(sceneView, frame)
                 when (tracking) {
@@ -625,11 +646,73 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun lensPayload(): JSObject {
+        val ret = JSObject()
+        ret.put("mean", lensMean.toDouble())
+        ret.put("variance", lensVar.toDouble())
+        ret.put("level", lastLensLevel)
+        ret.put("blocked", lensBlocked)
+        return ret
+    }
+
+    private fun sampleLens(frame: Frame) {
+        val now = System.currentTimeMillis()
+        if (now - lastLensMs < 400) return
+        lastLensMs = now
+        var image: Image? = null
+        try {
+            image = frame.acquireCameraImage() ?: return
+            val y = image.planes[0]
+            val buf = y.buffer.duplicate()
+            val w = image.width
+            val h = image.height
+            val rowStride = y.rowStride
+            val pixelStride = max(1, y.pixelStride)
+            var sum = 0.0
+            var sum2 = 0.0
+            var n = 0
+            for (gy in 1..8) {
+                val row = (h * gy) / 9
+                for (gx in 1..8) {
+                    val col = (w * gx) / 9
+                    val idx = row * rowStride + col * pixelStride
+                    if (idx in 0 until buf.limit()) {
+                        val u = (buf.get(idx).toInt() and 0xff) / 255.0
+                        sum += u
+                        sum2 += u * u
+                        n++
+                    }
+                }
+            }
+            if (n < 4) return
+            val mean = (sum / n).toFloat()
+            val variance = max(0.0, sum2 / n - mean * mean).toFloat()
+            lensMean = mean
+            lensVar = variance
+            val covered = mean <= 0.10f && variance <= 0.0028f
+            val level = if (covered) "covered" else "ok"
+            if (covered != lensBlocked || level != lastLensLevel) {
+                lensBlocked = covered
+                lastLensLevel = level
+                notifyListeners("lensChanged", lensPayload())
+            }
+        } catch (_: Exception) {
+            // SceneView may already hold the camera image
+        } finally {
+            image?.close()
+        }
+    }
+
     private fun detachArView() {
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
         stopImuWarmup()
+        lensMean = -1f
+        lensVar = -1f
+        lensBlocked = false
+        lastLensLevel = "ok"
+        lastLensMs = 0
         arSceneView?.let { view ->
             safeDestroySceneView(view)
             arSceneView = null

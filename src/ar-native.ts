@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { arArmLens, arLensShouldPlace } from "./ar-lens";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -90,10 +91,32 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const defaultHint = "Move your phone to find a surface";
+  const lens = arArmLens({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return await CubeAR.lensState();
+      } catch {
+        return null;
+      }
+    },
+    onChange: (judge) => {
+      if (placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = judge.coach || defaultHint;
+      }
+    },
+  });
+
+  const lensListener = await CubeAR.addListener("lensChanged", (data) => {
+    lens.pushNative(data);
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    if (event.message && placed === 0 && arLensShouldPlace(lens.snapshot())) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
@@ -114,6 +137,12 @@ export async function startNativeAR(
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
+    const snapshot = lens.snapshot();
+    if (!arLensShouldPlace(snapshot)) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = snapshot.coach || defaultHint;
+      return;
+    }
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
     try {
@@ -157,7 +186,9 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    lens.dispose();
     trackingListener.remove();
+    lensListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();
