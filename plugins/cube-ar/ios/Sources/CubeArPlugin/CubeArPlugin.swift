@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "hoverHit", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -58,6 +59,25 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.detachArView()
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
+        }
+    }
+
+    @objc func hoverHit(_ call: CAPPluginCall) {
+        guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
+            call.resolve(["hit": false])
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let view = self.arView else {
+                call.resolve(["hit": false])
+                return
+            }
+            let point = CGPoint(x: CGFloat(x), y: CGFloat(y))
+            guard let query = view.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .horizontal) else {
+                call.resolve(["hit": false])
+                return
+            }
+            call.resolve(["hit": view.session.raycast(query).first != nil])
         }
     }
 
