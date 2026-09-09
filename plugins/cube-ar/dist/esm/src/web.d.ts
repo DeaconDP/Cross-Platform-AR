@@ -5,4 +5,9 @@ export declare class CubeARWeb extends WebPlugin implements CubeARPlugin {
     startSession(_options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult>;
+    heatState(): Promise<{
+        thermal: number;
+        level: string;
+        lowFx: boolean;
+    }>;
 }

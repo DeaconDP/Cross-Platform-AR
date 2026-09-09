@@ -7,8 +7,10 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +69,8 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var heatListener: PowerManager.OnThermalStatusChangedListener? = null
+    private var lastHeatLevel = ""
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -190,6 +194,11 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun heatState(call: PluginCall) {
+        call.resolve(heatPayload())
     }
 
     @PluginMethod
@@ -340,6 +349,7 @@ class CubeArPlugin : Plugin() {
             addReticle(sceneView)
             arSceneView = sceneView
             attachCompleted = false
+            startHeatWatch()
 
             fun finishAttach() {
                 if (attachCompleted || arSceneView !== sceneView) return
@@ -625,7 +635,61 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun heatPayload(): JSObject {
+        var thermal = -1
+        if (Build.VERSION.SDK_INT >= 29) {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            if (pm != null) thermal = pm.currentThermalStatus
+        }
+        val level = heatLevelFromAndroid(thermal)
+        val payload = JSObject()
+        payload.put("thermal", thermal)
+        payload.put("level", level)
+        payload.put("lowFx", thermal >= 3)
+        return payload
+    }
+
+    private fun heatLevelFromAndroid(thermal: Int): String {
+        if (thermal < 0 || thermal <= 1) return "ok"
+        if (thermal == 2) return "warm"
+        if (thermal == 3) return "hot"
+        return "critical"
+    }
+
+    private fun startHeatWatch() {
+        stopHeatWatch()
+        if (Build.VERSION.SDK_INT < 29) return
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+        emitHeat(true)
+        val listener = PowerManager.OnThermalStatusChangedListener { emitHeat(false) }
+        heatListener = listener
+        pm.addThermalStatusListener(context.mainExecutor, listener)
+    }
+
+    private fun emitHeat(force: Boolean) {
+        val payload = heatPayload()
+        val level = payload.getString("level", "ok")
+        if (!force && level == lastHeatLevel) return
+        lastHeatLevel = level
+        notifyListeners("heatChanged", payload)
+    }
+
+    private fun stopHeatWatch() {
+        val listener = heatListener
+        if (listener != null && Build.VERSION.SDK_INT >= 29) {
+            try {
+                (context.getSystemService(Context.POWER_SERVICE) as? PowerManager)
+                    ?.removeThermalStatusListener(listener)
+            } catch (_: Exception) {
+                // already gone
+            }
+        }
+        heatListener = null
+        lastHeatLevel = ""
+    }
+
     private fun detachArView() {
+        stopHeatWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

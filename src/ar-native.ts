@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { arArmHeat, arHeatPlatformFromCap } from "./ar-heat";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -90,11 +91,31 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  let heatCoach = "";
+  const showHint = (text: string) => {
+    overlay.hint.hidden = false;
+    overlay.hint.textContent = heatCoach || text;
+  };
+  const heat = arArmHeat({
+    product: "cubes",
+    platform: arHeatPlatformFromCap(Capacitor.getPlatform()),
+    getNative: async () => {
+      try {
+        return await CubeAR.heatState();
+      } catch {
+        return null;
+      }
+    },
+    onChange: (judge) => {
+      heatCoach = judge.coach;
+      if (heatCoach) showHint(overlay.hint.textContent || "Move your phone to find a surface");
+    },
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
-      overlay.hint.textContent = event.message;
+      showHint(event.message);
     }
     if (debug.isEnabled()) {
       debug.tickNative({
@@ -132,6 +153,10 @@ export async function startNativeAR(
     }
   };
 
+  const heatListener = await CubeAR.addListener("heatChanged", (event) => {
+    heat.pushNative(event);
+  });
+
   document.addEventListener("pointerdown", onTap);
 
   const onExit = async () => {
@@ -157,7 +182,9 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    heat.dispose();
     trackingListener.remove();
+    heatListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { createCube, createLights } from "./scene";
+import { arArmHeat } from "./ar-heat";
 import {
   type CompatSnapshot,
   DebugCollector,
@@ -75,6 +76,19 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  let heatCoach = "";
+  const heat = arArmHeat({
+    product: "cubes",
+    platform: "web",
+    onChange: (judge) => {
+      heatCoach = judge.coach;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, judge.pixelRatio));
+      if (heatCoach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = heatCoach;
+      }
+    },
+  });
 
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
@@ -94,6 +108,7 @@ export async function startWebXR(
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    heat.dispose();
     unwireDebug();
     unbindSession();
     await session.end();
@@ -157,6 +172,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  heat.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

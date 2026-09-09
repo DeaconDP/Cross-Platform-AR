@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "heatState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var heatObserver: NSObjectProtocol?
+    private var heatLowFx = false
+    private var lastHeatLevel = ""
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -59,6 +63,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func heatState(_ call: CAPPluginCall) {
+        call.resolve(heatPayload())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -107,6 +115,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startHeatWatch()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -119,7 +128,55 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func heatPayload() -> [String: Any] {
+        let thermal: Int
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal: thermal = 0
+        case .fair: thermal = 1
+        case .serious: thermal = 2
+        case .critical: thermal = 3
+        @unknown default: thermal = 1
+        }
+        let level = thermal <= 0 ? "ok" : thermal == 1 ? "warm" : thermal == 2 ? "hot" : "critical"
+        let lowFx = thermal >= 2
+        return ["thermal": thermal, "level": level, "lowFx": lowFx]
+    }
+
+    private func startHeatWatch() {
+        stopHeatWatch()
+        emitHeat(force: true)
+        heatObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.emitHeat(force: false)
+        }
+    }
+
+    private func emitHeat(force: Bool) {
+        let payload = heatPayload()
+        let level = payload["level"] as? String ?? "ok"
+        heatLowFx = payload["lowFx"] as? Bool ?? false
+        if let view = arView {
+            view.antialiasingMode = heatLowFx ? .none : .multisampling4X
+        }
+        guard force || level != lastHeatLevel else { return }
+        lastHeatLevel = level
+        notifyListeners("heatChanged", data: payload)
+    }
+
+    private func stopHeatWatch() {
+        if let heatObserver {
+            NotificationCenter.default.removeObserver(heatObserver)
+        }
+        heatObserver = nil
+        lastHeatLevel = ""
+        heatLowFx = false
+    }
+
     private func detachArView() {
+        stopHeatWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
