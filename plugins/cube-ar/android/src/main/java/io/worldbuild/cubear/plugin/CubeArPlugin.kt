@@ -30,6 +30,7 @@ import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.HitResult
 import com.google.ar.core.Plane
+import com.google.ar.core.PointCloud
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
 import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationException
@@ -67,6 +68,9 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var sparsePoints = -1
+    private var sparsePlanes = 0
+    private var sparseLevel = "ok"
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -98,6 +102,7 @@ class CubeArPlugin : Plugin() {
         cubeColorHex = color
         placedCount = 0
         surfaceFound = false
+        resetSparse()
 
         if (getPermissionState("camera") == PermissionState.GRANTED) {
             ensureArCoreAndBeginSession(call)
@@ -180,6 +185,11 @@ class CubeArPlugin : Plugin() {
             depth++
         }
         return parts.joinToString(" ← ")
+    }
+
+    @PluginMethod
+    fun sparseState(call: PluginCall) {
+        call.resolve(sparsePayload())
     }
 
     @PluginMethod
@@ -309,6 +319,7 @@ class CubeArPlugin : Plugin() {
                     sessionFrameReceived = true
                     cancelSessionWatchdog()
                 }
+                noteSparse(frame)
                 val tracking = frame.camera.trackingState
                 updateReticle(sceneView, frame)
                 when (tracking) {
@@ -626,6 +637,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        resetSparse()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
@@ -651,6 +663,55 @@ class CubeArPlugin : Plugin() {
         val g = ((value shr 8) and 0xFF) / 255f
         val b = (value and 0xFF) / 255f
         return Triple(r, g, b)
+    }
+
+    private fun sparsePayload(): JSObject {
+        val o = JSObject()
+        o.put("points", sparsePoints)
+        o.put("planes", sparsePlanes)
+        o.put("level", sparseLevel)
+        o.put("placed", placedCount > 0)
+        return o
+    }
+
+    private fun resetSparse() {
+        sparsePoints = -1
+        sparsePlanes = 0
+        sparseLevel = "ok"
+    }
+
+    private fun noteSparse(frame: com.google.ar.core.Frame) {
+        var points = -1
+        try {
+            val cloud: PointCloud = frame.acquirePointCloud()
+            try {
+                points = cloud.points.remaining() / 4
+            } finally {
+                cloud.release()
+            }
+        } catch (_: Exception) {
+            return
+        }
+        var planes = 0
+        try {
+            arSceneView?.session?.getAllTrackables(Plane::class.java)?.forEach { plane ->
+                if (plane.trackingState == TrackingState.TRACKING) planes++
+            }
+        } catch (_: Exception) {
+            /* keep 0 */
+        }
+        sparsePoints = points
+        sparsePlanes = planes
+        val next = when {
+            points < 0 -> "ok"
+            points < 12 -> "blank"
+            points < 40 -> "thin"
+            else -> "ok"
+        }
+        if (next != sparseLevel) {
+            sparseLevel = next
+            notifyListeners("sparseChanged", sparsePayload())
+        }
     }
 
     private fun notifyTracking(state: String, message: String? = null) {

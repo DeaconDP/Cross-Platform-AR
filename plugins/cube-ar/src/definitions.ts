@@ -27,11 +27,19 @@ export interface CubeARTrackingEvent {
   message?: string;
 }
 
+export interface CubeARSparseEvent {
+  points: number;
+  planes: number;
+  level: string;
+  placed?: boolean;
+}
+
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  sparseState(): Promise<CubeARSparseEvent>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +47,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "sparseChanged",
+    listenerFunc: (event: CubeARSparseEvent) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "sparseState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var sparsePoints = -1
+    private var sparsePlanes = 0
+    private var sparseLevel = "ok"
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -39,6 +43,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         cubeColorHex = call.getString("colorHex") ?? "#30d158"
         placedCount = 0
         surfaceFound = false
+        resetSparse()
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -59,6 +64,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func sparseState(_ call: CAPPluginCall) {
+        call.resolve(sparsePayload())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -120,6 +129,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        resetSparse()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
@@ -178,6 +188,33 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    private func sparsePayload() -> [String: Any] {
+        [
+            "points": sparsePoints,
+            "planes": sparsePlanes,
+            "level": sparseLevel,
+            "placed": placedCount > 0,
+        ]
+    }
+
+    private func resetSparse() {
+        sparsePoints = -1
+        sparsePlanes = 0
+        sparseLevel = "ok"
+    }
+
+    private func noteSparse(_ frame: ARFrame) {
+        let points = frame.rawFeaturePoints.map { $0.points.count } ?? -1
+        let planes = frame.anchors.compactMap { $0 as? ARPlaneAnchor }.count
+        sparsePoints = points
+        sparsePlanes = planes
+        let next = points < 0 ? "ok" : points < 12 ? "blank" : points < 40 ? "thin" : "ok"
+        if next != sparseLevel {
+            sparseLevel = next
+            notifyListeners("sparseChanged", data: sparsePayload())
+        }
+    }
+
     private func notifyTracking(state: String, message: String? = nil) {
         var data: [String: Any] = ["state": state]
         if let message = message {
@@ -190,6 +227,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard let view = arView, let frame = view.session.currentFrame else { return }
+        noteSparse(frame)
         DispatchQueue.main.async { [weak self] in
             self?.updateReticle(in: view, frame: frame)
         }
