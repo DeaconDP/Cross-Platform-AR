@@ -223,6 +223,10 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+.is-ar-lens .ar-hint {
+  background: rgba(11, 13, 16, 0.92);
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;

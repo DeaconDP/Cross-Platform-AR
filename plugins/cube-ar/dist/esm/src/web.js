@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async lensState() {
+        return { mean: -1, variance: -1, level: "ok", blocked: false };
+    }
 }

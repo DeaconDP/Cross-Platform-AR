@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "lensState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,11 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var lastLensMs: TimeInterval = 0
+    private var lensMean: Float = -1
+    private var lensVar: Float = -1
+    private var lensBlocked = false
+    private var lastLensLevel = "ok"
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -61,6 +67,15 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func lensState(_ call: CAPPluginCall) {
+        call.resolve([
+            "mean": lensMean,
+            "variance": lensVar,
+            "level": lastLensLevel,
+            "blocked": lensBlocked,
+        ])
+    }
+
     @objc func onScreenTap(_ call: CAPPluginCall) {
         guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
             call.reject("Missing tap coordinates")
@@ -68,6 +83,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         DispatchQueue.main.async { [weak self] in
+            if self?.lensBlocked == true {
+                call.resolve(["placed": false, "count": self?.placedCount ?? 0, "covered": true])
+                return
+            }
             guard let self = self, let view = self.arView else {
                 call.resolve(["placed": false, "count": self?.placedCount ?? 0])
                 return
@@ -125,6 +144,11 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         arView = nil
         reticleNode = nil
         surfaceFound = false
+        lensMean = -1
+        lensVar = -1
+        lensBlocked = false
+        lastLensLevel = "ok"
+        lastLensMs = 0
 
         bridge?.webView.isOpaque = true
         bridge?.webView.backgroundColor = .white
@@ -185,11 +209,57 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         notifyListeners("trackingChanged", data: data)
     }
+
+    private func sampleLens(from frame: ARFrame) {
+        let now = CACurrentMediaTime()
+        guard now - lastLensMs > 0.4 else { return }
+        lastLensMs = now
+        let pb = frame.capturedImage
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(pb, 0) else { return }
+        let w = CVPixelBufferGetWidthOfPlane(pb, 0)
+        let h = CVPixelBufferGetHeightOfPlane(pb, 0)
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
+        let yPtr = base.assumingMemoryBound(to: UInt8.self)
+        var sum = 0.0
+        var sum2 = 0.0
+        var n = 0.0
+        guard w > 8, h > 8 else { return }
+        for gy in 1...8 {
+            let row = (h * gy) / 9
+            for gx in 1...8 {
+                let col = (w * gx) / 9
+                let v = Double(yPtr[row * stride + col]) / 255.0
+                sum += v
+                sum2 += v * v
+                n += 1
+            }
+        }
+        guard n >= 4 else { return }
+        let mean = Float(sum / n)
+        let variance = Float(max(0, sum2 / n - Double(mean * mean)))
+        lensMean = mean
+        lensVar = variance
+        let covered = mean <= 0.10 && variance <= 0.0028
+        let level = covered ? "covered" : "ok"
+        if covered != lensBlocked || level != lastLensLevel {
+            lensBlocked = covered
+            lastLensLevel = level
+            notifyListeners("lensChanged", data: [
+                "mean": lensMean,
+                "variance": lensVar,
+                "level": lastLensLevel,
+                "blocked": lensBlocked,
+            ])
+        }
+    }
 }
 
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard let view = arView, let frame = view.session.currentFrame else { return }
+        sampleLens(from: frame)
         DispatchQueue.main.async { [weak self] in
             self?.updateReticle(in: view, frame: frame)
         }

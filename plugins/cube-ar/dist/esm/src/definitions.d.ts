@@ -15,6 +15,13 @@ export interface CubeARTapOptions {
 export interface CubeARTapResult {
     placed: boolean;
     count: number;
+    covered?: boolean;
+}
+export interface CubeARLensState {
+    mean: number;
+    variance: number;
+    level: string;
+    blocked: boolean;
 }
 export interface CubeARTrackingEvent {
     state: "initializing" | "ready" | "limited" | "unavailable";
@@ -25,7 +32,9 @@ export interface CubeARPlugin {
     startSession(options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+    lensState(): Promise<CubeARLensState>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;
+    addListener(eventName: "lensChanged", listenerFunc: (event: CubeARLensState) => void): Promise<PluginListenerHandle>;
     removeAllListeners(): Promise<void>;
 }

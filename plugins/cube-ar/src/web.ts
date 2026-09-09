@@ -23,4 +23,8 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
   }
+
+  async lensState() {
+    return { mean: -1, variance: -1, level: "ok", blocked: false };
+  }
 }
