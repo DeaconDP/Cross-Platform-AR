@@ -9,6 +9,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +68,10 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var lastPaceMs = 0L
+    private var paceEma = -1f
+    private var paceLevel = "ok"
+    private var paceLowFx = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -193,6 +198,11 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun paceState(call: PluginCall) {
+        call.resolve(pacePayload())
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")
@@ -305,6 +315,7 @@ class CubeArPlugin : Plugin() {
             }
 
             sceneView.onSessionUpdated = { _, frame ->
+                notePaceFrame()
                 if (!sessionFrameReceived) {
                     sessionFrameReceived = true
                     cancelSessionWatchdog()
@@ -629,6 +640,7 @@ class CubeArPlugin : Plugin() {
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
+        resetPace()
         stopImuWarmup()
         arSceneView?.let { view ->
             safeDestroySceneView(view)
@@ -651,6 +663,40 @@ class CubeArPlugin : Plugin() {
         val g = ((value shr 8) and 0xFF) / 255f
         val b = (value and 0xFF) / 255f
         return Triple(r, g, b)
+    }
+
+    private fun pacePayload(): JSObject {
+        val o = JSObject()
+        val dt = paceEma
+        o.put("dtMs", dt)
+        o.put("fps", if (dt > 0) 1000f / dt else 0)
+        o.put("level", paceLevel)
+        o.put("lowFx", paceLowFx)
+        return o
+    }
+
+    private fun resetPace() {
+        lastPaceMs = 0L
+        paceEma = -1f
+        paceLevel = "ok"
+        paceLowFx = false
+    }
+
+    private fun notePaceFrame() {
+        val now = SystemClock.elapsedRealtime()
+        if (lastPaceMs > 0) {
+            val dt = (now - lastPaceMs).toFloat()
+            if (dt > 0 && dt < 250) {
+                paceEma = if (paceEma < 0) dt else paceEma * 0.85f + dt * 0.15f
+                val next = if (paceEma < 22) "ok" else if (paceEma < 36) "slow" else "jank"
+                if (next != paceLevel) {
+                    paceLevel = next
+                    paceLowFx = next != "ok"
+                    notifyListeners("paceChanged", pacePayload())
+                }
+            }
+        }
+        lastPaceMs = now
     }
 
     private fun notifyTracking(state: String, message: String? = null) {

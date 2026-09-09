@@ -40,6 +40,13 @@ export function createLights(): THREE.Group {
  * experience for browsers with no AR path. Orbit to inspect the cube.
  */
 let activePreviewStop: (() => void) | null = null;
+let activePreviewRenderer: THREE.WebGLRenderer | null = null;
+
+export function setPreviewPixelRatio(cap: number): void {
+  const renderer = activePreviewRenderer;
+  if (!renderer) return;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, Math.max(1, cap)));
+}
 
 /** Stop the inline WebGL preview so native AR can own the GPU context. */
 export function stopPreview(): void {
@@ -53,6 +60,7 @@ export function startPreview(container: HTMLElement): void {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.appendChild(renderer.domElement);
+  activePreviewRenderer = renderer;
 
   const scene = new THREE.Scene();
   scene.add(createLights());
@@ -94,6 +102,7 @@ export function startPreview(container: HTMLElement): void {
     renderer.setAnimationLoop(null);
     controls.dispose();
     renderer.dispose();
+    if (activePreviewRenderer === renderer) activePreviewRenderer = null;
     container.replaceChildren();
   };
 }
