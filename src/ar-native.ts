@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { arArmLux, arLuxPlatformFromCap } from "./ar-lux";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -90,6 +91,28 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const huntCopy = overlay.hint.textContent;
+  const lux = arArmLux({
+    product: "cubes",
+    platform: arLuxPlatformFromCap(Capacitor.getPlatform()),
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return await CubeAR.luxState();
+      } catch {
+        return null;
+      }
+    },
+    onChange: (judge) => {
+      if (placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = judge.coach || huntCopy;
+      }
+    },
+  });
+  const luxListener = await CubeAR.addListener("luxChanged", (data) => {
+    lux.pushNative(data);
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -158,6 +181,8 @@ export async function startNativeAR(
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
+    luxListener.remove();
+    lux.dispose();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();
