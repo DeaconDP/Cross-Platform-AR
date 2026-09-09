@@ -67,6 +67,11 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var imuLive = false
+    private var imuHasAccel = false
+    private var imuHasGyro = false
+    private var imuGravityMag = -1f
+    private var imuKind = "ok"
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -190,6 +195,11 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun imuState(call: PluginCall) {
+        call.resolve(imuPayload())
     }
 
     @PluginMethod
@@ -440,7 +450,20 @@ class CubeArPlugin : Plugin() {
         stopImuWarmup()
         val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
         val listener = object : SensorEventListener {
-            override fun onSensorChanged(event: SensorEvent?) {}
+            override fun onSensorChanged(event: SensorEvent?) {
+                val e = event ?: return
+                val type = e.sensor.type
+                if (
+                    type != Sensor.TYPE_ACCELEROMETER &&
+                    type != Sensor.TYPE_ACCELEROMETER_UNCALIBRATED
+                ) {
+                    return
+                }
+                val x = e.values[0]
+                val y = e.values[1]
+                val z = e.values[2]
+                noteImu(sqrt(x * x + y * y + z * z))
+            }
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         }
         val types = intArrayOf(
@@ -455,9 +478,55 @@ class CubeArPlugin : Plugin() {
             val ok = sm.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_FASTEST)
             if (ok) registered++
         }
-        if (registered == 0) return
+        imuHasGyro = sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null ||
+            sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE_UNCALIBRATED) != null
+        imuHasAccel = registered > 0 && (
+            sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||
+                sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER_UNCALIBRATED) != null
+        )
+        if (registered == 0 || !imuHasAccel) {
+            try {
+                sm.unregisterListener(listener)
+            } catch (_: Exception) {
+                // never registered
+            }
+            imuKind = "missing"
+            notifyListeners("imuChanged", imuPayload())
+            return
+        }
         sensorManager = sm
         imuWarmupListener = listener
+    }
+
+    private fun imuPayload(): JSObject {
+        val o = JSObject()
+        o.put("live", imuLive)
+        o.put("hasAccel", imuHasAccel)
+        o.put("hasGyro", imuHasGyro)
+        o.put("gravityMag", imuGravityMag)
+        o.put("kind", imuKind)
+        o.put("denied", false)
+        o.put("placed", placedCount > 0)
+        return o
+    }
+
+    private fun noteImu(mag: Float) {
+        val first = !imuLive
+        imuLive = true
+        imuGravityMag = mag
+        val next = if (mag < 0.45f || mag > 22f) "stuck" else "ok"
+        if (first || next != imuKind) {
+            imuKind = next
+            notifyListeners("imuChanged", imuPayload())
+        }
+    }
+
+    private fun resetImu() {
+        imuLive = false
+        imuHasAccel = false
+        imuHasGyro = false
+        imuGravityMag = -1f
+        imuKind = "ok"
     }
 
     private fun stopImuWarmup() {
@@ -469,6 +538,7 @@ class CubeArPlugin : Plugin() {
         }
         imuWarmupListener = null
         sensorManager = null
+        resetImu()
     }
 
 

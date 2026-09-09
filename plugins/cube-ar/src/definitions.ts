@@ -27,11 +27,22 @@ export interface CubeARTrackingEvent {
   message?: string;
 }
 
+export interface CubeARImuEvent {
+  live?: boolean;
+  hasAccel?: boolean;
+  hasGyro?: boolean;
+  gravityMag?: number;
+  kind?: string;
+  denied?: boolean;
+  placed?: boolean;
+}
+
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  imuState(): Promise<CubeARImuEvent & { live: boolean; hasAccel: boolean; hasGyro: boolean; gravityMag: number; kind: string }>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +50,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "imuChanged",
+    listenerFunc: (event: CubeARImuEvent) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { arArmImu } from "./ar-imu";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -75,6 +76,16 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const defaultHint = "Move your phone to find a surface";
+  const imu = arArmImu({
+    product: "cubes",
+    useWeb: true,
+    onChange: (judge) => {
+      overlay.root.classList.toggle("is-ar-imu", Boolean(judge.coach));
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = judge.coach || (placed === 0 ? defaultHint : overlay.hint.textContent);
+    },
+  });
 
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
@@ -84,7 +95,8 @@ export async function startWebXR(
     scene.add(cube);
     placed++;
     overlay.count.textContent = String(placed);
-    overlay.hint.hidden = true;
+    imu.setPlaced(true);
+    if (!imu.snapshot().coach) overlay.hint.hidden = true;
     debug.logEvent(`cube placed (#${placed})`);
   });
 
@@ -124,7 +136,9 @@ export async function startWebXR(
           if (!surfaceFound) {
             surfaceFound = true;
             debug.logEvent("surface found");
-            if (placed === 0) overlay.hint.textContent = "Tap to place a cube";
+            if (placed === 0 && !imu.snapshot().coach) {
+              overlay.hint.textContent = "Tap to place a cube";
+            }
           }
         }
       } else {
@@ -157,6 +171,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  imu.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

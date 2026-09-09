@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import { arArmImu } from "./ar-imu";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -90,10 +91,31 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const defaultHint = "Move your phone to find a surface";
+
+  const imu = arArmImu({
+    product: "cubes",
+    getNative: async () => {
+      try {
+        return await CubeAR.imuState();
+      } catch {
+        return null;
+      }
+    },
+    onChange: (judge) => {
+      overlay.root.classList.toggle("is-ar-imu", Boolean(judge.coach));
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = judge.coach || defaultHint;
+    },
+  });
+
+  const imuListener = await CubeAR.addListener("imuChanged", (event) => {
+    imu.pushNative(event);
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    if (event.message && placed === 0 && !imu.snapshot().coach) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
@@ -124,7 +146,8 @@ export async function startNativeAR(
       if (result.placed) {
         placed = result.count;
         overlay.count.textContent = String(placed);
-        overlay.hint.hidden = true;
+        imu.setPlaced(true);
+        if (!imu.snapshot().coach) overlay.hint.hidden = true;
         debug.logEvent(`cube placed (#${placed})`);
       }
     } catch {
@@ -157,6 +180,8 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    imu.dispose();
+    imuListener.remove();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");

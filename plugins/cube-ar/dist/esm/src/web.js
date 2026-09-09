@@ -12,4 +12,15 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async imuState() {
+        return {
+            live: false,
+            hasAccel: false,
+            hasGyro: false,
+            gravityMag: -1,
+            kind: "ok",
+            denied: false,
+            placed: false,
+        };
+    }
 }
