@@ -223,6 +223,19 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+#ar-overlay.is-ar-lux-bright .ar-hint,
+#ar-overlay.is-ar-lux-bright .ar-chip {
+  background: rgba(11, 13, 16, 0.82);
+}
+
+#ar-overlay.is-ar-lux-glare .ar-hint,
+#ar-overlay.is-ar-lux-glare .ar-chip,
+#ar-overlay.is-ar-lux-glare .ar-exit {
+  background: #0b0d10;
+  backdrop-filter: none;
+  color: #fff;
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;

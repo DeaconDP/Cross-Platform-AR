@@ -67,6 +67,10 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var luxManager: SensorManager? = null
+    private var luxListener: SensorEventListener? = null
+    private var lastLux = -1f
+    private var lastLuxLevel = "ok"
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -180,6 +184,11 @@ class CubeArPlugin : Plugin() {
             depth++
         }
         return parts.joinToString(" ← ")
+    }
+
+    @PluginMethod
+    fun luxState(call: PluginCall) {
+        call.resolve(luxPayload())
     }
 
     @PluginMethod
@@ -347,6 +356,7 @@ class CubeArPlugin : Plugin() {
                 // Samsung One UI 8 / ARCore 1.54+: hold uncalibrated IMU open so
                 // Session.resume() does not hit "Failed to register sensor to queue 0".
                 startImuWarmup(activity)
+                startLuxWatch()
                 sceneView.postDelayed({
                     if (arSceneView !== sceneView) return@postDelayed
                     try {
@@ -625,7 +635,59 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun luxPayload(): JSObject {
+        val level = luxLevelFromAndroid(lastLux)
+        val o = JSObject()
+        o.put("lux", lastLux.toDouble())
+        o.put("level", level)
+        o.put("opaque", level == "glare")
+        return o
+    }
+
+    private fun luxLevelFromAndroid(lux: Float): String {
+        if (lux < 0f || lux < 8000f) return "ok"
+        if (lux < 25000f) return "bright"
+        return "glare"
+    }
+
+    private fun startLuxWatch() {
+        stopLuxWatch()
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+        val light = sm.getDefaultSensor(Sensor.TYPE_LIGHT) ?: return
+        luxManager = sm
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                lastLux = event.values[0]
+                emitLux(false)
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        luxListener = listener
+        sm.registerListener(listener, light, SensorManager.SENSOR_DELAY_NORMAL)
+        emitLux(true)
+    }
+
+    private fun emitLux(force: Boolean) {
+        val payload = luxPayload()
+        val level = payload.getString("level") ?: "ok"
+        if (!force && level == lastLuxLevel) return
+        lastLuxLevel = level
+        notifyListeners("luxChanged", payload)
+    }
+
+    private fun stopLuxWatch() {
+        val listener = luxListener
+        if (listener != null) {
+            luxManager?.unregisterListener(listener)
+        }
+        luxListener = null
+        luxManager = null
+        lastLux = -1f
+        lastLuxLevel = "ok"
+    }
+
     private fun detachArView() {
+        stopLuxWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

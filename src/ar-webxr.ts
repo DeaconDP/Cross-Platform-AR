@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { arArmLux, arLuxPlatformFromCap } from "./ar-lux";
 import { createCube, createLights } from "./scene";
 import {
   type CompatSnapshot,
@@ -75,6 +76,18 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const huntCopy = "Move your phone to find a surface";
+  const lux = arArmLux({
+    product: "cubes",
+    platform: arLuxPlatformFromCap("web"),
+    root: overlay.root,
+    onChange: (judge) => {
+      if (placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = judge.coach || huntCopy;
+      }
+    },
+  });
 
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
@@ -94,6 +107,7 @@ export async function startWebXR(
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    lux.dispose();
     unwireDebug();
     unbindSession();
     await session.end();
@@ -157,6 +171,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  lux.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

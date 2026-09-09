@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "luxState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var lastLux: Double = -1
+    private var lastLuxLevel = "ok"
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -59,6 +62,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func luxState(_ call: CAPPluginCall) {
+        call.resolve(luxPayload())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -119,7 +126,28 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func luxPayload() -> [String: Any] {
+        let level = luxLevelFromIos(lastLux)
+        return ["lux": lastLux, "level": level, "opaque": level == "glare"]
+    }
+
+    private func luxLevelFromIos(_ lux: Double) -> String {
+        if lux < 0 || lux < 1600 { return "ok" }
+        if lux < 2200 { return "bright" }
+        return "glare"
+    }
+
+    private func noteLux(_ intensity: Double, force: Bool = false) {
+        lastLux = intensity
+        let level = luxLevelFromIos(intensity)
+        if !force && level == lastLuxLevel { return }
+        lastLuxLevel = level
+        notifyListeners("luxChanged", data: luxPayload())
+    }
+
     private func detachArView() {
+        lastLux = -1
+        lastLuxLevel = "ok"
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
@@ -190,6 +218,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard let view = arView, let frame = view.session.currentFrame else { return }
+        if let estimate = frame.lightEstimate {
+            noteLux(Double(estimate.ambientIntensity))
+        }
         DispatchQueue.main.async { [weak self] in
             self?.updateReticle(in: view, frame: frame)
         }
