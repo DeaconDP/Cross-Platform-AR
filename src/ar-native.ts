@@ -1,5 +1,11 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import {
+  arHoverCoach,
+  arHoverShouldPlace,
+  createArHover,
+  createArHoverProbe,
+} from "./ar-hover";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -90,6 +96,40 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const hoverReticle = document.getElementById("ar-hover-reticle");
+  const hoverProbe = createArHoverProbe(async (x, y) => {
+    try {
+      return (await CubeAR.hoverHit({ x, y })).hit;
+    } catch {
+      return false;
+    }
+  });
+  const hover = createArHover({
+    onChange: (snap) => {
+      if (!hoverReticle) return;
+      if (!snap.hovering || placed > 0) {
+        hoverReticle.hidden = true;
+        hoverReticle.classList.remove("is-hit");
+        return;
+      }
+      hoverReticle.hidden = false;
+      hoverReticle.style.left = `${snap.viewX}px`;
+      hoverReticle.style.top = `${snap.viewY}px`;
+      const coach = arHoverCoach({
+        kind: snap.kind,
+        hovering: true,
+        placed: false,
+        mode: "cubes",
+      });
+      if (coach) overlay.hint.textContent = coach;
+      const dpr = window.devicePixelRatio || 1;
+      void hoverProbe.probe(snap.viewX * dpr, snap.viewY * dpr).then((ok) => {
+        if (ok == null) return;
+        hoverReticle.classList.toggle("is-hit", ok);
+      });
+    },
+  });
+  hover.arm();
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -113,6 +153,7 @@ export async function startNativeAR(
   const onTap = async (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    if (!arHoverShouldPlace(event.pointerType, event.button === 0 ? 1 : event.buttons)) return;
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
@@ -132,7 +173,19 @@ export async function startNativeAR(
     }
   };
 
+  const onHoverMove = (event: PointerEvent) => {
+    if (placed > 0) return;
+    hover.move(event.clientX, event.clientY, event.pointerType, {
+      left: 0,
+      top: 0,
+      width: Math.max(innerWidth, 1),
+      height: Math.max(innerHeight, 1),
+    });
+  };
+  const onHoverLeave = () => hover.leave();
   document.addEventListener("pointerdown", onTap);
+  document.addEventListener("pointermove", onHoverMove);
+  document.addEventListener("pointerleave", onHoverLeave);
 
   const onExit = async () => {
     overlay.exit.disabled = true;
@@ -154,6 +207,14 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    hover.dispose();
+    hoverProbe.reset();
+    if (hoverReticle) {
+      hoverReticle.hidden = true;
+      hoverReticle.classList.remove("is-hit");
+    }
+    document.removeEventListener("pointermove", onHoverMove);
+    document.removeEventListener("pointerleave", onHoverLeave);
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;

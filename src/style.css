@@ -223,6 +223,23 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+.ar-hover-reticle {
+  position: fixed;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 20;
+  opacity: 0.72;
+}
+
+.ar-hover-reticle.is-hit {
+  border-color: #30d158;
+  opacity: 1;
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;

@@ -193,6 +193,24 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun hoverHit(call: PluginCall) {
+        val x = call.getFloat("x") ?: run {
+            call.resolve(JSObject().apply { put("hit", false) })
+            return
+        }
+        val y = call.getFloat("y") ?: run {
+            call.resolve(JSObject().apply { put("hit", false) })
+            return
+        }
+        bridge.executeOnMainThread {
+            val view = arSceneView
+            val result = JSObject()
+            result.put("hit", view != null && probeHitAtScreen(x, y, view))
+            call.resolve(result)
+        }
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")
@@ -561,6 +579,14 @@ class CubeArPlugin : Plugin() {
             }
         } else {
             reticle.isVisible = false
+        }
+    }
+
+    private fun probeHitAtScreen(x: Float, y: Float, sceneView: ARSceneView): Boolean {
+        val frame = sceneView.frame ?: return false
+        return frame.hitTest(x, y).any { hit ->
+            val trackable = hit.trackable
+            trackable is Plane && trackable.isPoseInPolygon(hit.hitPose)
         }
     }
 
