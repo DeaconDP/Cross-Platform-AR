@@ -1,5 +1,6 @@
 import ARKit
 import Capacitor
+import CoreMotion
 import SceneKit
 import UIKit
 
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "imuState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private let imuMotion = CMMotionManager()
+    private var imuLive = false
+    private var imuHasAccel = false
+    private var imuHasGyro = false
+    private var imuGravityMag: Double = -1
+    private var imuKind = "ok"
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +52,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startImu()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -51,6 +60,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.reject("Failed to start native AR: \(error.localizedDescription)")
             }
         }
+    }
+
+    @objc func imuState(_ call: CAPPluginCall) {
+        call.resolve(self.imuPayload())
     }
 
     @objc func stopSession(_ call: CAPPluginCall) {
@@ -119,7 +132,66 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func imuPayload() -> [String: Any] {
+        [
+            "live": imuLive,
+            "hasAccel": imuHasAccel,
+            "hasGyro": imuHasGyro,
+            "gravityMag": imuGravityMag,
+            "kind": imuKind,
+            "denied": false,
+            "placed": placedCount > 0,
+        ]
+    }
+
+    private func resetImu() {
+        imuLive = false
+        imuHasAccel = false
+        imuHasGyro = false
+        imuGravityMag = -1
+        imuKind = "ok"
+    }
+
+    private func startImu() {
+        stopImu()
+        imuHasGyro = imuMotion.isGyroAvailable
+        guard imuMotion.isAccelerometerAvailable else {
+            imuHasAccel = false
+            imuKind = "missing"
+            notifyListeners("imuChanged", data: imuPayload())
+            return
+        }
+        imuHasAccel = true
+        imuMotion.accelerometerUpdateInterval = 0.05
+        imuMotion.startAccelerometerUpdates(to: .main) { [weak self] data, _ in
+            guard let self, let a = data?.acceleration else { return }
+            let x = a.x * 9.81
+            let y = a.y * 9.81
+            let z = a.z * 9.81
+            self.noteImu(sqrt(x * x + y * y + z * z))
+        }
+    }
+
+    private func noteImu(_ mag: Double) {
+        let first = !imuLive
+        imuLive = true
+        imuGravityMag = mag
+        let next = mag < 0.45 || mag > 22 ? "stuck" : "ok"
+        if first || next != imuKind {
+            imuKind = next
+            notifyListeners("imuChanged", data: imuPayload())
+        }
+    }
+
+    private func stopImu() {
+        if imuMotion.isAccelerometerActive {
+            imuMotion.stopAccelerometerUpdates()
+        }
+        resetImu()
+    }
+
     private func detachArView() {
+        stopImu()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
