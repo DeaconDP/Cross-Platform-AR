@@ -223,6 +223,10 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+.ar-snap {
+  pointer-events: auto;
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;

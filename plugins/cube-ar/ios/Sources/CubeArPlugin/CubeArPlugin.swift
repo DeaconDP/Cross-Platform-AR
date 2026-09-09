@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "snapshot", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -75,6 +76,25 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
             let placed = self.placeCube(at: CGPoint(x: CGFloat(x), y: CGFloat(y)), in: view)
             call.resolve(["placed": placed, "count": self.placedCount])
+        }
+    }
+
+    @objc func snapshot(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let view = self.arView else {
+                call.resolve(["ok": false, "reason": "not-ready"])
+                return
+            }
+            let image = view.snapshot()
+            guard let data = image.jpegData(compressionQuality: 0.82) else {
+                call.resolve(["ok": false, "reason": "fail"])
+                return
+            }
+            call.resolve([
+                "ok": true,
+                "mime": "image/jpeg",
+                "data": data.base64EncodedString(),
+            ])
         }
     }
 
