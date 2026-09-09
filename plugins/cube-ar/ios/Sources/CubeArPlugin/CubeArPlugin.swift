@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import Capacitor
 import SceneKit
 import UIKit
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "routeState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,9 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var routeObserver: NSObjectProtocol?
+    private var monoObserver: NSObjectProtocol?
+    private var lastRouteKind = ""
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +49,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startRouteWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -59,6 +65,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func routeState(_ call: CAPPluginCall) {
+        call.resolve(routePayload())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -119,7 +129,81 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func routePayload() -> [String: Any] {
+        let session = AVAudioSession.sharedInstance()
+        var wired = false
+        var bluetooth = false
+        var speaker = false
+        for out in session.currentRoute.outputs {
+            switch out.portType {
+            case .headphones, .headsetMic, .usbAudio:
+                wired = true
+            case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
+                bluetooth = true
+            case .builtInSpeaker, .builtInReceiver:
+                speaker = true
+            default:
+                if out.portType.rawValue.lowercased().contains("hearing") {
+                    bluetooth = true
+                }
+            }
+        }
+        let kind: String
+        if bluetooth { kind = "bluetooth" }
+        else if wired { kind = "wired" }
+        else if speaker { kind = "speaker" }
+        else { kind = "unknown" }
+        return [
+            "kind": kind,
+            "outputs": session.currentRoute.outputs.count,
+            "wired": wired,
+            "bluetooth": bluetooth,
+            "speaker": speaker,
+            "mono": UIAccessibility.isMonoAudioEnabled
+        ]
+    }
+
+    private func startRouteWatch() {
+        stopRouteWatch()
+        emitRoute(force: true)
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.emitRoute(force: false)
+        }
+        monoObserver = NotificationCenter.default.addObserver(
+            forName: UIAccessibility.monoAudioStatusDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.emitRoute(force: true)
+        }
+    }
+
+    private func emitRoute(force: Bool) {
+        let payload = routePayload()
+        let kind = payload["kind"] as? String ?? "unknown"
+        guard force || kind != lastRouteKind else { return }
+        lastRouteKind = kind
+        notifyListeners("routeChanged", data: payload)
+    }
+
+    private func stopRouteWatch() {
+        if let routeObserver {
+            NotificationCenter.default.removeObserver(routeObserver)
+        }
+        if let monoObserver {
+            NotificationCenter.default.removeObserver(monoObserver)
+        }
+        routeObserver = nil
+        monoObserver = nil
+        lastRouteKind = ""
+    }
+
     private func detachArView() {
+        stopRouteWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

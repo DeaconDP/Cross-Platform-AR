@@ -23,4 +23,15 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
   }
+
+  async routeState() {
+    return {
+      kind: "unknown",
+      outputs: 0,
+      wired: false,
+      bluetooth: false,
+      speaker: false,
+      mono: false,
+    };
+  }
 }

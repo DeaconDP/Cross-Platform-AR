@@ -1,5 +1,6 @@
 # TODO
 
+- [x] Mid-session audio-route steward so unplug/AirPods cannot blast cube SFX on the speaker (`src/ar-route.ts`, native `routeState` / `routeChanged`) — 2026-09-09
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)
