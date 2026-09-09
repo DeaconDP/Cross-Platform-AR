@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arArmRoute } from "./ar-route";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -91,10 +92,35 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  let surfaceHint = "Move your phone to find a surface";
+  const route = arArmRoute({
+    product: "cubes",
+    getNative: async () => {
+      try {
+        return await CubeAR.routeState();
+      } catch {
+        return null;
+      }
+    },
+    onChange: (judge) => {
+      if (judge.coach) overlay.hint.textContent = judge.coach;
+      else if (placed === 0) overlay.hint.textContent = surfaceHint;
+    },
+  });
+  let routeListen: { remove: () => Promise<void> } | null = null;
+  try {
+    routeListen = await CubeAR.addListener("routeChanged", (data) => {
+      route.pushNative(data);
+    });
+  } catch {
+    /* web stub */
+  }
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
-      overlay.hint.textContent = event.message;
+      surfaceHint = event.message;
+      if (!route.snapshot().coach) overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
       debug.tickNative({
@@ -154,6 +180,8 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    route.dispose();
+    if (routeListen) void routeListen.remove();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;

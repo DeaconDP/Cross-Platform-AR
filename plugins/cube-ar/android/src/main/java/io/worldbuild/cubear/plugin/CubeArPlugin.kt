@@ -3,6 +3,11 @@ package io.worldbuild.cubear.plugin
 import android.Manifest
 import android.content.Context
 import android.graphics.Color
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
+import android.provider.Settings
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -67,6 +72,8 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var routeCallback: AudioDeviceCallback? = null
+    private var lastRouteKind = ""
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -190,6 +197,11 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun routeState(call: PluginCall) {
+        call.resolve(routePayload())
     }
 
     @PluginMethod
@@ -347,6 +359,7 @@ class CubeArPlugin : Plugin() {
                 // Samsung One UI 8 / ARCore 1.54+: hold uncalibrated IMU open so
                 // Session.resume() does not hit "Failed to register sensor to queue 0".
                 startImuWarmup(activity)
+                startRouteWatch()
                 sceneView.postDelayed({
                     if (arSceneView !== sceneView) return@postDelayed
                     try {
@@ -625,7 +638,98 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun routePayload(): JSObject {
+        var wired = false
+        var bluetooth = false
+        var speaker = false
+        var outputs = 0
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        if (am != null) {
+            val devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            outputs = devices.size
+            for (device in devices) {
+                when (device.type) {
+                    AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                    AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                    AudioDeviceInfo.TYPE_USB_DEVICE,
+                    22,
+                    -> wired = true
+                    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                    AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                    23,
+                    26,
+                    27,
+                    -> bluetooth = true
+                    AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+                    AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
+                    -> speaker = true
+                }
+            }
+        }
+        val kind = when {
+            bluetooth -> "bluetooth"
+            wired -> "wired"
+            speaker -> "speaker"
+            else -> "unknown"
+        }
+        var mono = false
+        try {
+            mono = Settings.System.getInt(context.contentResolver, "master_mono", 0) == 1
+        } catch (_: Exception) {
+            /* missing setting */
+        }
+        val o = JSObject()
+        o.put("kind", kind)
+        o.put("outputs", outputs)
+        o.put("wired", wired)
+        o.put("bluetooth", bluetooth)
+        o.put("speaker", speaker)
+        o.put("mono", mono)
+        return o
+    }
+
+    private fun startRouteWatch() {
+        stopRouteWatch()
+        emitRoute(true)
+        if (Build.VERSION.SDK_INT < 23) return
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val callback = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<AudioDeviceInfo>) {
+                emitRoute(false)
+            }
+
+            override fun onAudioDevicesRemoved(removedDevices: Array<AudioDeviceInfo>) {
+                emitRoute(false)
+            }
+        }
+        routeCallback = callback
+        am.registerAudioDeviceCallback(callback, null)
+    }
+
+    private fun emitRoute(force: Boolean) {
+        val payload = routePayload()
+        val kind = payload.getString("kind", "unknown")
+        if (!force && kind == lastRouteKind) return
+        lastRouteKind = kind ?: "unknown"
+        notifyListeners("routeChanged", payload)
+    }
+
+    private fun stopRouteWatch() {
+        val callback = routeCallback
+        if (callback != null && Build.VERSION.SDK_INT >= 23) {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            try {
+                am?.unregisterAudioDeviceCallback(callback)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        routeCallback = null
+        lastRouteKind = ""
+    }
+
     private fun detachArView() {
+        stopRouteWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
