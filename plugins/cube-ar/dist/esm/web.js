@@ -12,4 +12,10 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async osArAvailable() {
+        return { available: false, kind: "none" };
+    }
+    async openOsAr() {
+        return { opened: false };
+    }
 }

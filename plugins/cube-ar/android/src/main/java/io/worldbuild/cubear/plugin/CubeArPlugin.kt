@@ -2,6 +2,8 @@ package io.worldbuild.cubear.plugin
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -180,6 +182,65 @@ class CubeArPlugin : Plugin() {
             depth++
         }
         return parts.joinToString(" ← ")
+    }
+
+    @PluginMethod
+    fun osArAvailable(call: PluginCall) {
+        val ok = sceneViewerAvailable()
+        val result = JSObject()
+        result.put("available", ok)
+        result.put("kind", if (ok) "sceneviewer" else "none")
+        call.resolve(result)
+    }
+
+    @PluginMethod
+    fun openOsAr(call: PluginCall) {
+        val modelUrl = call.getString("modelUrl") ?: ""
+        val title = call.getString("title") ?: "AR"
+        bridge.executeOnMainThread {
+            val result = JSObject()
+            if (!modelUrl.startsWith("https://")) {
+                result.put("opened", false)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
+            try {
+                val intent = sceneViewerIntent(modelUrl, title)
+                if (intent.resolveActivity(context.packageManager) == null) {
+                    result.put("opened", false)
+                    call.resolve(result)
+                    return@executeOnMainThread
+                }
+                activity?.startActivity(intent)
+                result.put("opened", true)
+                call.resolve(result)
+            } catch (_: Exception) {
+                result.put("opened", false)
+                call.resolve(result)
+            }
+        }
+    }
+
+    private fun sceneViewerIntent(fileUrl: String, title: String): Intent {
+        val uri = Uri.parse("https://arvr.google.com/scene-viewer/1.0")
+            .buildUpon()
+            .appendQueryParameter("file", fileUrl)
+            .appendQueryParameter("mode", "ar_preferred")
+            .appendQueryParameter("title", title)
+            .build()
+        return Intent(Intent.ACTION_VIEW).apply {
+            data = uri
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }
+
+    private fun sceneViewerAvailable(): Boolean {
+        return try {
+            sceneViewerIntent("https://example.com/model.glb", "AR")
+                .resolveActivity(context.packageManager) != null
+        } catch (_: Exception) {
+            false
+        }
     }
 
     @PluginMethod

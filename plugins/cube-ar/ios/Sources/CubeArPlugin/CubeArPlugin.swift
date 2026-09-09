@@ -12,6 +12,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "osArAvailable", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openOsAr", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -51,6 +53,14 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.reject("Failed to start native AR: \(error.localizedDescription)")
             }
         }
+    }
+
+    @objc func osArAvailable(_ call: CAPPluginCall) {
+        call.resolve(["available": false, "kind": "quicklook"])
+    }
+
+    @objc func openOsAr(_ call: CAPPluginCall) {
+        call.resolve(["opened": false])
     }
 
     @objc func stopSession(_ call: CAPPluginCall) {
