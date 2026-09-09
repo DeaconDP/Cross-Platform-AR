@@ -23,4 +23,12 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
   }
+
+  async osArAvailable() {
+    return { available: false as const, kind: "none" as const };
+  }
+
+  async openOsAr() {
+    return { opened: false };
+  }
 }

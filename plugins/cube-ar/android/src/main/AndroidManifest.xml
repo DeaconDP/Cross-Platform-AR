@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <package android:name="com.google.ar.core" />
+        <package android:name="com.google.android.googlequicksearchbox" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" android:host="arvr.google.com" />
+        </intent>
+    </queries>
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- ARCore IMU >200Hz on Android 12+ / Samsung One UI 8 sensor HAL workaround -->
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />

@@ -5,6 +5,13 @@ import { startPreview } from "./scene";
 import { isWebXRSupported, startWebXR } from "./ar-webxr";
 import { isQuickLookSupported, prepareQuickLook } from "./ar-quicklook";
 import { isNativeARSupported, nativeARErrorMessage, startNativeAR } from "./ar-native";
+import {
+  arOsCoach,
+  arOsHttpsFileUrl,
+  arOsSceneViewerHref,
+  arOsSceneViewerSupported,
+} from "./ar-os";
+import { CubeAR } from "cube-ar";
 import { buildCompatSnapshot } from "./ar-debug";
 
 const $ = <T extends HTMLElement>(id: string): T =>
@@ -198,6 +205,46 @@ async function init(): Promise<void> {
             setStatus("Couldn't open Chrome. Open this URL yourself: " + origin, true);
           } finally {
             resetPathButton("chrome", "Open in Chrome for AR");
+          }
+        },
+      }),
+    );
+  }
+
+  const cubeGlb = origin ? `${origin}/cube.glb` : "";
+  const sceneViewerOk =
+    arOsSceneViewerSupported(navigator.userAgent, Capacitor.getPlatform()) &&
+    !!cubeGlb &&
+    arOsHttpsFileUrl(cubeGlb);
+  if (sceneViewerOk) {
+    paths.push(
+      markPrimary({
+        id: "sceneviewer",
+        label: "Scene Viewer · Android",
+        title: "View in Google AR",
+        detail: arOsCoach("sceneviewer", "cubes"),
+        run: async () => {
+          setPathBusy("sceneviewer", true, "Opening Scene Viewer\u2026");
+          try {
+            if (Capacitor.isNativePlatform()) {
+              const os = await CubeAR.osArAvailable();
+              if (os.available) {
+                const opened = await CubeAR.openOsAr({
+                  modelUrl: cubeGlb,
+                  title: "Cube",
+                });
+                if (opened.opened) {
+                  setStatus("Scene Viewer opened — tap a table to place the cube.");
+                  return;
+                }
+              }
+            }
+            window.open(arOsSceneViewerHref(cubeGlb, "Cube"), "_blank", "noopener");
+            setStatus("Scene Viewer opened — tap a table to place the cube.");
+          } catch {
+            setStatus("Couldn't open Scene Viewer. Try Chrome on an Android phone.", true);
+          } finally {
+            resetPathButton("sceneviewer", "View in Google AR");
           }
         },
       }),
