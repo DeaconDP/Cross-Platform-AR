@@ -9,6 +9,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +68,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private val freezeTick = Runnable { noteFreeze() }
+    private var freezeSessionStartMs = 0L
+    private var lastFrameTsNs = -1L
+    private var lastUniqueFrameAtMs = 0L
+    private var freezeStuck = false
+    private var lastFreezeKind = ""
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -193,6 +200,11 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun freezeState(call: PluginCall) {
+        call.resolve(freezePayload())
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")
@@ -204,6 +216,14 @@ class CubeArPlugin : Plugin() {
         }
 
         bridge.executeOnMainThread {
+            if (isFrozen()) {
+                val result = JSObject()
+                result.put("placed", false)
+                result.put("frozen", true)
+                result.put("count", placedCount)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
             val view = arSceneView
             if (view == null) {
                 val result = JSObject()
@@ -305,9 +325,11 @@ class CubeArPlugin : Plugin() {
             }
 
             sceneView.onSessionUpdated = { _, frame ->
+                noteCameraFrame(frame.timestamp)
                 if (!sessionFrameReceived) {
                     sessionFrameReceived = true
                     cancelSessionWatchdog()
+                    startFreezeWatch()
                 }
                 val tracking = frame.camera.trackingState
                 updateReticle(sceneView, frame)
@@ -625,7 +647,74 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun startFreezeWatch() {
+        freezeSessionStartMs = SystemClock.elapsedRealtime()
+        lastFrameTsNs = -1L
+        lastUniqueFrameAtMs = freezeSessionStartMs
+        freezeStuck = false
+        lastFreezeKind = ""
+        mainHandler.removeCallbacks(freezeTick)
+        mainHandler.postDelayed(freezeTick, 250)
+    }
+
+    private fun stopFreezeWatch() {
+        mainHandler.removeCallbacks(freezeTick)
+        lastFreezeKind = ""
+        freezeStuck = false
+    }
+
+    private fun noteCameraFrame(ts: Long) {
+        val now = SystemClock.elapsedRealtime()
+        if (ts != lastFrameTsNs) {
+            lastFrameTsNs = ts
+            lastUniqueFrameAtMs = now
+            freezeStuck = false
+        } else if (now - lastUniqueFrameAtMs >= 1200) {
+            freezeStuck = true
+        }
+    }
+
+    private fun isFrozen(): Boolean {
+        return freezePayload().getString("kind") == "frozen"
+    }
+
+    private fun freezePayload(): JSObject {
+        val now = SystemClock.elapsedRealtime()
+        val live = arSceneView != null
+        val age = if (lastFrameTsNs < 0) now - freezeSessionStartMs else now - lastUniqueFrameAtMs
+        val session = if (live) now - freezeSessionStartMs else 0
+        var kind = "ok"
+        if (live && session >= 2000) {
+            kind = when {
+                freezeStuck || age >= 1200 -> "frozen"
+                age >= 400 -> "stale"
+                else -> "ok"
+            }
+        }
+        val o = JSObject()
+        o.put("live", live)
+        o.put("ageMs", if (live) age else -1)
+        o.put("sessionMs", if (live) session else -1)
+        o.put("stuck", freezeStuck && live)
+        o.put("kind", kind)
+        o.put("blockPlace", kind == "frozen")
+        o.put("placed", placedCount > 0)
+        return o
+    }
+
+    private fun noteFreeze() {
+        if (arSceneView == null) return
+        val o = freezePayload()
+        val kind = o.getString("kind", "ok")
+        if (kind != lastFreezeKind) {
+            lastFreezeKind = kind
+            notifyListeners("freezeChanged", o)
+        }
+        mainHandler.postDelayed(freezeTick, 250)
+    }
+
     private fun detachArView() {
+        stopFreezeWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

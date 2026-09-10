@@ -20,12 +20,23 @@ export interface CubeARTrackingEvent {
     state: "initializing" | "ready" | "limited" | "unavailable";
     message?: string;
 }
+export interface CubeARFreezeState {
+    live: boolean;
+    ageMs: number;
+    sessionMs: number;
+    stuck: boolean;
+    kind: string;
+    blockPlace: boolean;
+    placed: boolean;
+}
 export interface CubeARPlugin {
     isSupported(): Promise<CubeARSupportResult>;
     startSession(options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+    freezeState(): Promise<CubeARFreezeState>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;
+    addListener(eventName: "freezeChanged", listenerFunc: (event: CubeARFreezeState) => void): Promise<PluginListenerHandle>;
     removeAllListeners(): Promise<void>;
 }

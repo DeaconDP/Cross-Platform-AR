@@ -6,6 +6,11 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import {
+  arArmFreeze,
+  arParseXrClock,
+  type ArVideoClockStamp,
+} from "./ar-freeze";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -75,14 +80,29 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const xrSessionStart = performance.now();
+  let xrStamp: ArVideoClockStamp | null = null;
+  const freeze = arArmFreeze({
+    product: "cubes",
+    useWeb: true,
+    getWebSample: () => null,
+    onChange: (judge) => {
+      if (judge.coach && placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = judge.coach;
+      }
+    },
+  });
 
   session.addEventListener("select", () => {
+    if (freeze.snapshot().blockPlace) return;
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
     cube.rotateY(Math.random() * Math.PI * 2);
     scene.add(cube);
     placed++;
+    freeze.setPlaced(true);
     overlay.count.textContent = String(placed);
     overlay.hint.hidden = true;
     debug.logEvent(`cube placed (#${placed})`);
@@ -111,6 +131,21 @@ export async function startWebXR(
   let surfaceFound = false;
   renderer.setAnimationLoop((_time, frame?: XRFrame) => {
     if (!frame) return;
+    const clock = arParseXrClock({
+      live: true,
+      frameTime: frame.predictedDisplayTime,
+      prev: xrStamp,
+      nowMs: performance.now(),
+      sessionStartMs: xrSessionStart,
+    });
+    xrStamp = clock.stamp;
+    freeze.pushNative({
+      live: true,
+      ageMs: clock.sample.ageMs,
+      sessionMs: clock.sample.sessionMs,
+      stuck: clock.sample.stuck,
+      placed: placed > 0,
+    });
     const referenceSpace = renderer.xr.getReferenceSpace();
     let hits: XRHitTestResult[] = [];
     if (referenceSpace) {
@@ -157,6 +192,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  freeze.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
