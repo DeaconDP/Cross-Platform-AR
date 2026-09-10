@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "invertState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var invertKind = "ok"
+    private var invertRaw = "ok"
+    private var invertSince: TimeInterval = 0
+    private var invertObservers: [NSObjectProtocol] = []
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -59,6 +64,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func invertState(_ call: CAPPluginCall) {
+        call.resolve(invertPayload())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -107,6 +116,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startInvertWatch()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -119,7 +129,80 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func invertPayload() -> [String: Any] {
+        [
+            "kind": invertKind,
+            "invert": UIAccessibility.isInvertColorsEnabled,
+            "gray": UIAccessibility.isGrayscaleEnabled,
+            "valid": true,
+        ]
+    }
+
+    private func currentInvertRaw() -> String {
+        if UIAccessibility.isInvertColorsEnabled { return "invert" }
+        if UIAccessibility.isGrayscaleEnabled { return "gray" }
+        return "ok"
+    }
+
+    private func applyInvertIgnore() {
+        arView?.accessibilityIgnoresInvertColors = true
+        bridge?.webView?.accessibilityIgnoresInvertColors = true
+    }
+
+    private func startInvertWatch() {
+        stopInvertWatch()
+        applyInvertIgnore()
+        invertKind = "ok"
+        invertRaw = "ok"
+        invertSince = 0
+        tickInvert()
+        let names: [NSNotification.Name] = [
+            UIAccessibility.invertColorsStatusDidChangeNotification,
+            UIAccessibility.grayscaleStatusDidChangeNotification,
+        ]
+        for name in names {
+            invertObservers.append(
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    self?.tickInvert()
+                }
+            )
+        }
+    }
+
+    private func stopInvertWatch() {
+        for obs in invertObservers {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        invertObservers.removeAll()
+        invertKind = "ok"
+        arView?.accessibilityIgnoresInvertColors = false
+        bridge?.webView?.accessibilityIgnoresInvertColors = false
+    }
+
+    private func tickInvert() {
+        applyInvertIgnore()
+        let raw = currentInvertRaw()
+        let now = Date().timeIntervalSince1970
+        if invertSince == 0 {
+            invertSince = now
+            invertRaw = raw
+            invertKind = "ok"
+            return
+        }
+        if raw != invertRaw {
+            invertRaw = raw
+            invertSince = now
+            return
+        }
+        if raw == invertKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - invertSince < need { return }
+        invertKind = raw
+        notifyListeners("invertChanged", data: invertPayload())
+    }
+
     private func detachArView() {
+        stopInvertWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

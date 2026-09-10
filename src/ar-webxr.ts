@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arInvertArm } from "./ar-invert";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -75,6 +76,13 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const invertArm = arInvertArm({
+    product: "cubes",
+    root: overlay.root,
+    onKind: (_kind, coach) => {
+      if (placed === 0 && coach) overlay.hint.textContent = coach;
+    },
+  });
 
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
@@ -156,6 +164,7 @@ export async function startWebXR(
     session.addEventListener("end", () => resolve(), { once: true });
   });
 
+  invertArm.dispose();
   overlay.exit.removeEventListener("click", onExit);
   unwireDebug();
   unbindSession();
