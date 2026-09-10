@@ -1,7 +1,10 @@
 package io.worldbuild.cubear.plugin
 
 import android.Manifest
+import android.app.ActivityManager
+import android.content.ComponentCallbacks2
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -67,6 +70,13 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var memCallbacks: ComponentCallbacks2? = null
+    private var memAvail = -1L
+    private var memTotal = -1L
+    private var memWarned = false
+    private var memKind = "ok"
+    private var memLowFx = false
+    private var memTicker: Runnable? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -78,6 +88,9 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+        private const val MEM_TIGHT_BYTES = 80L * 1024L * 1024L
+        private const val MEM_CRITICAL_BYTES = 32L * 1024L * 1024L
+        private const val MEM_POLL_MS = 2000L
     }
 
     @PluginMethod
@@ -148,6 +161,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startMem()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -190,6 +204,116 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun memState(call: PluginCall) {
+        noteMem()
+        call.resolve(memPayload())
+    }
+
+    private fun memPayload(): JSObject {
+        val o = JSObject()
+        o.put("live", memAvail >= 0 || memWarned)
+        o.put("bytesAvail", memAvail)
+        o.put("bytesTotal", memTotal)
+        o.put(
+            "usedRatio",
+            if (memTotal > 0 && memAvail >= 0) 1.0 - (memAvail / memTotal.toDouble()) else -1,
+        )
+        o.put("warned", memWarned)
+        o.put("kind", memKind)
+        o.put("lowFx", memLowFx)
+        o.put("placed", placedCount > 0)
+        return o
+    }
+
+    private fun startMem() {
+        stopMem()
+        try {
+            val callbacks = object : ComponentCallbacks2 {
+                override fun onTrimMemory(level: Int) {
+                    if (level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+                        memWarned = true
+                    }
+                    noteMem()
+                }
+
+                override fun onConfigurationChanged(newConfig: Configuration) {}
+
+                @Deprecated("Deprecated in Java")
+                override fun onLowMemory() {
+                    memWarned = true
+                    noteMem()
+                }
+            }
+            memCallbacks = callbacks
+            context.registerComponentCallbacks(callbacks)
+        } catch (_: Exception) {
+            memCallbacks = null
+        }
+        noteMem()
+        val tick = Runnable { noteMem() }
+        memTicker = tick
+        mainHandler.postDelayed(tick, MEM_POLL_MS)
+    }
+
+    private fun noteMem() {
+        var avail = -1L
+        var total = -1L
+        var low = memWarned
+        try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            if (am != null) {
+                val info = ActivityManager.MemoryInfo()
+                am.getMemoryInfo(info)
+                avail = info.availMem
+                total = info.totalMem
+                if (info.lowMemory || (info.threshold > 0 && avail < info.threshold)) {
+                    low = true
+                }
+            }
+        } catch (_: Exception) {
+            /* keep last */
+        }
+        memAvail = avail
+        memTotal = total
+        val next = when {
+            low || (avail >= 0 && avail < MEM_CRITICAL_BYTES) -> "critical"
+            avail >= 0 && avail < MEM_TIGHT_BYTES -> "tight"
+            else -> "ok"
+        }
+        memLowFx = next != "ok"
+        if (next != memKind) {
+            memKind = next
+            notifyListeners("memChanged", memPayload())
+        } else {
+            memKind = next
+        }
+        if (arSceneView != null) {
+            memTicker?.let {
+                mainHandler.removeCallbacks(it)
+                mainHandler.postDelayed(it, MEM_POLL_MS)
+            }
+        }
+    }
+
+    private fun stopMem() {
+        memTicker?.let { mainHandler.removeCallbacks(it) }
+        memTicker = null
+        memCallbacks?.let {
+            try {
+                context.unregisterComponentCallbacks(it)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        memCallbacks = null
+        memAvail = -1L
+        memTotal = -1L
+        memWarned = false
+        memKind = "ok"
+        memLowFx = false
     }
 
     @PluginMethod
@@ -626,6 +750,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopMem()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

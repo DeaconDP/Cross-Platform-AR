@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arArmMem } from "./ar-mem";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -90,6 +91,31 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const defaultHint = overlay.hint.textContent;
+  const mem = arArmMem({
+    product: "cubes",
+    root: overlay.root,
+    useWeb: true,
+    getNative: async () => {
+      try {
+        return await CubeAR.memState();
+      } catch {
+        return null;
+      }
+    },
+    onChange: (judge) => {
+      if (judge.coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = judge.coach;
+      } else if (placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = defaultHint;
+      }
+    },
+  });
+  const memListen = await CubeAR.addListener("memChanged", (data) => {
+    mem.pushNative(data);
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -124,7 +150,8 @@ export async function startNativeAR(
       if (result.placed) {
         placed = result.count;
         overlay.count.textContent = String(placed);
-        overlay.hint.hidden = true;
+        mem.setPlaced(true);
+        if (!mem.snapshot().coach) overlay.hint.hidden = true;
         debug.logEvent(`cube placed (#${placed})`);
       }
     } catch {
@@ -157,6 +184,8 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    mem.dispose();
+    void memListen.remove();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");

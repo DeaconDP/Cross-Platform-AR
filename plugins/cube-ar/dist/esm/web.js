@@ -12,4 +12,16 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async memState() {
+        return {
+            live: false,
+            bytesAvail: -1,
+            bytesTotal: -1,
+            usedRatio: -1,
+            warned: false,
+            kind: "ok",
+            lowFx: false,
+            placed: false,
+        };
+    }
 }
