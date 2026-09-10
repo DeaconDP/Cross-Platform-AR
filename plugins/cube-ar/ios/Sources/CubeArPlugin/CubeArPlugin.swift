@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "readerState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var readerKind = "ok"
+    private var readerRaw = "ok"
+    private var readerSince: TimeInterval = 0
+    private var readerExplore = false
+    private var readerSpeak = false
+    private var readerObservers: [NSObjectProtocol] = []
+    private var readerTimer: Timer?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +52,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startReaderWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -61,7 +70,15 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func readerState(_ call: CAPPluginCall) {
+        call.resolve(readerPayload())
+    }
+
     @objc func onScreenTap(_ call: CAPPluginCall) {
+        if readerKind == "explore" {
+            call.resolve(["placed": false, "count": placedCount, "explore": true])
+            return
+        }
         guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
             call.reject("Missing tap coordinates")
             return
@@ -119,7 +136,89 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func readerPayload() -> [String: Any] {
+        [
+            "kind": readerKind,
+            "explore": readerExplore,
+            "speak": readerSpeak,
+            "valid": true,
+        ]
+    }
+
+    private func currentReaderRaw() -> String {
+        let explore = UIAccessibility.isVoiceOverRunning
+        let speak = UIAccessibility.isSpeakScreenEnabled || UIAccessibility.isSpeakSelectionEnabled
+        readerExplore = explore
+        readerSpeak = speak || explore
+        if explore { return "explore" }
+        if speak { return "speak" }
+        return "ok"
+    }
+
+    private func startReaderWatch() {
+        stopReaderWatch()
+        readerKind = "ok"
+        readerRaw = "ok"
+        readerSince = 0
+        tickReader()
+        readerObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIAccessibility.voiceOverStatusDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.tickReader()
+            }
+        )
+        readerObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIAccessibility.speakScreenStatusDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.tickReader()
+            }
+        )
+        readerTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.tickReader()
+        }
+    }
+
+    private func stopReaderWatch() {
+        readerTimer?.invalidate()
+        readerTimer = nil
+        for obs in readerObservers {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        readerObservers.removeAll()
+        readerKind = "ok"
+        readerExplore = false
+        readerSpeak = false
+    }
+
+    private func tickReader() {
+        let raw = currentReaderRaw()
+        let now = Date().timeIntervalSince1970
+        if readerSince == 0 {
+            readerSince = now
+            readerRaw = raw
+            readerKind = "ok"
+            return
+        }
+        if raw != readerRaw {
+            readerRaw = raw
+            readerSince = now
+            return
+        }
+        if raw == readerKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - readerSince < need { return }
+        readerKind = raw
+        notifyListeners("readerChanged", data: readerPayload())
+    }
+
     private func detachArView() {
+        stopReaderWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

@@ -8,6 +8,13 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  arReaderArm,
+  arReaderBlocksPlace,
+  arReaderCoach,
+  arReaderParseNative,
+  type ArReaderKind,
+} from "./ar-reader";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -87,13 +94,24 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  let readerKind: ArReaderKind = "ok";
+  let readerCoach: string | null = null;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const applyReaderHint = () => {
+    overlay.root.classList.toggle("is-ar-reader-explore", readerKind === "explore");
+    overlay.root.classList.toggle("is-ar-reader-speak", readerKind === "speak");
+    if (readerCoach && placed === 0) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = readerCoach;
+    }
+  };
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    if (event.message && placed === 0 && !readerCoach) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
@@ -114,6 +132,13 @@ export async function startNativeAR(
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
+    if (arReaderBlocksPlace(readerKind, "cubes")) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent =
+        readerCoach ?? "TalkBack remaps taps — turn it off so the tap hits the table.";
+      return;
+    }
+
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
     try {
@@ -131,6 +156,35 @@ export async function startNativeAR(
       debug.logEvent("tap failed");
     }
   };
+
+  const readerListener = await CubeAR.addListener("readerChanged", (data) => {
+    readerKind = arReaderParseNative(data).kind;
+    readerCoach = arReaderCoach(readerKind, "cubes");
+    applyReaderHint();
+  });
+  try {
+    readerKind = arReaderParseNative(await CubeAR.readerState()).kind;
+    readerCoach = arReaderCoach(readerKind, "cubes");
+    applyReaderHint();
+  } catch {
+    /* plugin without readerState */
+  }
+  const readerArm = arReaderArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arReaderParseNative(await CubeAR.readerState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      readerKind = kind;
+      readerCoach = coach;
+      applyReaderHint();
+    },
+  });
 
   document.addEventListener("pointerdown", onTap);
 
@@ -156,6 +210,8 @@ export async function startNativeAR(
   } finally {
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
+    readerArm.dispose();
+    void readerListener.remove();
     overlay.exit.disabled = false;
     trackingListener.remove();
     await CubeAR.removeAllListeners();

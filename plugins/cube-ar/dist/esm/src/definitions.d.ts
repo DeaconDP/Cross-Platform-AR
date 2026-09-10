@@ -15,6 +15,13 @@ export interface CubeARTapOptions {
 export interface CubeARTapResult {
     placed: boolean;
     count: number;
+    explore?: boolean;
+}
+export interface CubeARReaderState {
+    kind?: string;
+    explore?: boolean;
+    speak?: boolean;
+    valid?: boolean;
 }
 export interface CubeARTrackingEvent {
     state: "initializing" | "ready" | "limited" | "unavailable";
@@ -25,7 +32,9 @@ export interface CubeARPlugin {
     startSession(options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+    readerState(): Promise<CubeARReaderState>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;
+    addListener(eventName: "readerChanged", listenerFunc: (event: CubeARReaderState) => void): Promise<PluginListenerHandle>;
     removeAllListeners(): Promise<void>;
 }
