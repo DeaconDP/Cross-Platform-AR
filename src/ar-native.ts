@@ -2,6 +2,12 @@ import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
+  arCalmArm,
+  arCalmCoach,
+  arCalmParseNative,
+  type ArCalmKind,
+} from "./ar-calm";
+import {
   type CompatSnapshot,
   DebugCollector,
   resetDebugOverlay,
@@ -90,6 +96,38 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const hintDefault = "Move your phone to find a surface";
+  const applyCalm = (kind: ArCalmKind, coach: string | null) => {
+    overlay.root.classList.toggle("is-ar-calm-reduce", kind === "reduce");
+    overlay.root.classList.toggle("is-ar-calm-fade", kind === "fade");
+    if (placed === 0) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = coach ?? hintDefault;
+    }
+  };
+  let calmListen: { remove: () => Promise<void> } | null = null;
+  try {
+    calmListen = await CubeAR.addListener("calmChanged", (data) => {
+      const parsed = arCalmParseNative(data);
+      applyCalm(parsed.kind, arCalmCoach(parsed.kind, "cubes"));
+    });
+    const parsed = arCalmParseNative(await CubeAR.calmState());
+    applyCalm(parsed.kind, arCalmCoach(parsed.kind, "cubes"));
+  } catch {
+    /* plugin without calmState */
+  }
+  const calmArm = arCalmArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arCalmParseNative(await CubeAR.calmState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => applyCalm(kind, coach),
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -154,6 +192,8 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    calmArm.dispose();
+    void calmListen?.remove();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
