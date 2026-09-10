@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "dimState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,11 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var dimKind = "ok"
+    private var dimRaw = "ok"
+    private var dimSince: TimeInterval = 0
+    private var dimObservers: [NSObjectProtocol] = []
+    private var dimTimer: Timer?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +50,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startDimWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -59,6 +66,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func dimState(_ call: CAPPluginCall) {
+        call.resolve(dimPayload())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -119,7 +130,82 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func dimPayload() -> [String: Any] {
+        [
+            "kind": dimKind,
+            "night": false,
+            "extraDim": false,
+            "reduceWhite": UIAccessibility.isReduceWhitePointEnabled,
+            "brightness": UIScreen.main.brightness,
+            "valid": true,
+        ]
+    }
+
+    private func currentDimRaw() -> String {
+        if UIAccessibility.isReduceWhitePointEnabled { return "dim" }
+        if UIScreen.main.brightness < 0.12 { return "dim" }
+        return "ok"
+    }
+
+    private func startDimWatch() {
+        stopDimWatch()
+        dimKind = "ok"
+        dimRaw = "ok"
+        dimSince = 0
+        tickDim()
+        let names: [NSNotification.Name] = [
+            UIAccessibility.reduceWhitePointStatusDidChangeNotification,
+            UIScreen.brightnessDidChangeNotification,
+        ]
+        for name in names {
+            dimObservers.append(
+                NotificationCenter.default.addObserver(
+                    forName: name,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.tickDim()
+                }
+            )
+        }
+        dimTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.tickDim()
+        }
+    }
+
+    private func stopDimWatch() {
+        dimTimer?.invalidate()
+        dimTimer = nil
+        for obs in dimObservers {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        dimObservers.removeAll()
+        dimKind = "ok"
+    }
+
+    private func tickDim() {
+        let raw = currentDimRaw()
+        let now = Date().timeIntervalSince1970
+        if dimSince == 0 {
+            dimSince = now
+            dimRaw = raw
+            dimKind = "ok"
+            return
+        }
+        if raw != dimRaw {
+            dimRaw = raw
+            dimSince = now
+            return
+        }
+        if raw == dimKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - dimSince < need { return }
+        dimKind = raw
+        notifyListeners("dimChanged", data: dimPayload())
+    }
+
     private func detachArView() {
+        stopDimWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
