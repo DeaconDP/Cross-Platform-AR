@@ -20,12 +20,20 @@ export interface CubeARTrackingEvent {
     state: "initializing" | "ready" | "limited" | "unavailable";
     message?: string;
 }
+export interface CubeARCaptionState {
+    kind?: string;
+    caps?: boolean;
+    aid?: boolean;
+    valid?: boolean;
+}
 export interface CubeARPlugin {
     isSupported(): Promise<CubeARSupportResult>;
     startSession(options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+    captionState(): Promise<CubeARCaptionState>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;
+    addListener(eventName: "captionChanged", listenerFunc: (event: CubeARCaptionState) => void): Promise<PluginListenerHandle>;
     removeAllListeners(): Promise<void>;
 }

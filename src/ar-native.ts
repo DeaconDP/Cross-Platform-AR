@@ -8,6 +8,12 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  arCaptionArm,
+  arCaptionCoach,
+  arCaptionParseNative,
+  type ArCaptionKind,
+} from "./ar-caption";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -90,10 +96,42 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  let captionCoach: string | null = null;
+  const applyCaption = (kind: ArCaptionKind, coach: string | null) => {
+    captionCoach = coach;
+    overlay.root.classList.toggle("is-ar-caption-caps", kind === "caps");
+    overlay.root.classList.toggle("is-ar-caption-aid", kind === "aid");
+    if (coach) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = coach;
+    }
+  };
+  const captionListener = await CubeAR.addListener("captionChanged", (event) => {
+    const parsed = arCaptionParseNative(event);
+    applyCaption(parsed.kind, arCaptionCoach(parsed.kind, "cubes"));
+  });
+  try {
+    const first = arCaptionParseNative(await CubeAR.captionState());
+    if (first.valid) applyCaption(first.kind, arCaptionCoach(first.kind, "cubes"));
+  } catch {
+    /* plugin without captionState */
+  }
+  const captionArm = arCaptionArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arCaptionParseNative(await CubeAR.captionState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: applyCaption,
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    if (event.message && placed === 0 && !captionCoach) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
@@ -124,7 +162,12 @@ export async function startNativeAR(
       if (result.placed) {
         placed = result.count;
         overlay.count.textContent = String(placed);
-        overlay.hint.hidden = true;
+        if (captionCoach) {
+          overlay.hint.hidden = false;
+          overlay.hint.textContent = captionCoach;
+        } else {
+          overlay.hint.hidden = true;
+        }
         debug.logEvent(`cube placed (#${placed})`);
       }
     } catch {
@@ -157,7 +200,10 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    captionArm.dispose();
+    overlay.root.classList.remove("is-ar-caption-caps", "is-ar-caption-aid");
     trackingListener.remove();
+    captionListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();
