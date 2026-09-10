@@ -40,5 +40,20 @@ export interface CubeARPlugin {
     eventName: "sessionEnded",
     listenerFunc: () => void,
   ): Promise<PluginListenerHandle>;
+  vpnState(): Promise<{
+    kind: string;
+    vpn: boolean;
+    lock: boolean;
+    valid: boolean;
+  }>;
+  addListener(
+    eventName: "vpnChanged",
+    listenerFunc: (event: {
+      kind?: string;
+      vpn?: boolean;
+      lock?: boolean;
+      valid?: boolean;
+    }) => void,
+  ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

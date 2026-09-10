@@ -223,6 +223,11 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+.ar-hint.is-ar-vpn-vpn,
+.ar-hint.is-ar-vpn-lock {
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;
