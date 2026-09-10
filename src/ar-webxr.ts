@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arArmSlew, arParseSlewMotion, arSlewRadFromAxes } from "./ar-slew";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -75,16 +76,50 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  let slewRad = -1;
+  let slewLive = false;
+  const onSlewMotion = (ev: DeviceMotionEvent) => {
+    const rate = ev.rotationRate;
+    if (!rate) return;
+    slewLive = true;
+    slewRad = arSlewRadFromAxes(rate.alpha ?? 0, rate.beta ?? 0, rate.gamma ?? 0, true);
+  };
+  window.addEventListener("devicemotion", onSlewMotion, { passive: true });
+  const sessionStart = performance.now();
+  const slew = arArmSlew({
+    product: "cubes",
+    useWeb: true,
+    getWebSample: () =>
+      arParseSlewMotion({
+        live: slewLive,
+        radPerSec: slewRad,
+        sessionMs: performance.now() - sessionStart,
+        placed: placed > 0,
+      }),
+    onChange: (judge) => {
+      if (judge.coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = judge.coach;
+      }
+    },
+  });
 
   session.addEventListener("select", () => {
+    const judge = slew.snapshot();
+    if (judge.blockPlace) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = judge.coach;
+      return;
+    }
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
     cube.rotateY(Math.random() * Math.PI * 2);
     scene.add(cube);
     placed++;
+    slew.setPlaced(true);
     overlay.count.textContent = String(placed);
-    overlay.hint.hidden = true;
+    if (!slew.snapshot().coach) overlay.hint.hidden = true;
     debug.logEvent(`cube placed (#${placed})`);
   });
 
@@ -124,7 +159,9 @@ export async function startWebXR(
           if (!surfaceFound) {
             surfaceFound = true;
             debug.logEvent("surface found");
-            if (placed === 0) overlay.hint.textContent = "Tap to place a cube";
+            if (placed === 0 && !slew.snapshot().coach) {
+              overlay.hint.textContent = "Tap to place a cube";
+            }
           }
         }
       } else {
@@ -157,6 +194,8 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  window.removeEventListener("devicemotion", onSlewMotion);
+  slew.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

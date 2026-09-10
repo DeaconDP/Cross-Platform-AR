@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async slewState() {
+        return { live: false, radPerSec: -1, kind: "ok", blockPlace: false };
+    }
 }

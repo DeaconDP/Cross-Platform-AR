@@ -20,6 +20,17 @@ export interface CubeARTapOptions {
 export interface CubeARTapResult {
   placed: boolean;
   count: number;
+  spin?: boolean;
+}
+
+export interface CubeARSlewState {
+  live?: boolean;
+  radPerSec?: number;
+  sessionMs?: number;
+  kind?: string;
+  blockPlace?: boolean;
+  placed?: boolean;
+  spin?: boolean;
 }
 
 export interface CubeARTrackingEvent {
@@ -32,6 +43,7 @@ export interface CubeARPlugin {
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  slewState(): Promise<CubeARSlewState>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +51,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "slewChanged",
+    listenerFunc: (event: CubeARSlewState) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

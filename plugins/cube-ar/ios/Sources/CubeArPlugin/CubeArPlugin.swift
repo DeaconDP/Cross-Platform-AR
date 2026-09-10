@@ -1,5 +1,6 @@
 import ARKit
 import Capacitor
+import CoreMotion
 import SceneKit
 import UIKit
 
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "slewState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private let slewMotion = CMMotionManager()
+    private var slewLive = false
+    private var slewRadPerSec: Double = -1
+    private var slewEma: Double = 0
+    private var slewKind = "ok"
+    private var slewSessionStart: TimeInterval = 0
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -68,8 +76,16 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, let view = self.arView else {
-                call.resolve(["placed": false, "count": self?.placedCount ?? 0])
+            guard let self = self else {
+                call.resolve(["placed": false, "count": 0])
+                return
+            }
+            if self.isSlewSpin() {
+                call.resolve(["placed": false, "count": self.placedCount, "spin": true])
+                return
+            }
+            guard let view = self.arView else {
+                call.resolve(["placed": false, "count": self.placedCount])
                 return
             }
 
@@ -107,6 +123,11 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startSlew()
+    }
+
+    @objc func slewState(_ call: CAPPluginCall) {
+        call.resolve(slewPayload())
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -119,7 +140,65 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func slewPayload() -> [String: Any] {
+        let sessionMs = slewSessionStart == 0
+            ? -1
+            : (ProcessInfo.processInfo.systemUptime - slewSessionStart) * 1000
+        return [
+            "live": slewLive,
+            "radPerSec": slewRadPerSec,
+            "kind": slewKind,
+            "blockPlace": isSlewSpin(),
+            "spin": isSlewSpin(),
+            "placed": placedCount > 0,
+            "sessionMs": sessionMs,
+        ]
+    }
+
+    private func isSlewSpin() -> Bool {
+        guard slewLive, slewSessionStart > 0 else { return false }
+        let sessionMs = (ProcessInfo.processInfo.systemUptime - slewSessionStart) * 1000
+        return sessionMs >= 800 && (slewRadPerSec >= 2.6 || slewKind == "spin")
+    }
+
+    private func startSlew() {
+        stopSlew()
+        slewSessionStart = ProcessInfo.processInfo.systemUptime
+        guard slewMotion.isGyroAvailable else { return }
+        slewMotion.gyroUpdateInterval = 1.0 / 30.0
+        slewMotion.startGyroUpdates(to: .main) { [weak self] data, _ in
+            guard let self, let data else { return }
+            let r = data.rotationRate
+            let mag = (r.x * r.x + r.y * r.y + r.z * r.z).squareRoot()
+            self.noteSlew(mag)
+        }
+    }
+
+    private func noteSlew(_ rad: Double) {
+        slewEma = slewLive ? slewEma * 0.7 + rad * 0.3 : rad
+        let first = !slewLive
+        slewLive = true
+        slewRadPerSec = slewEma
+        let next = slewEma >= 2.6 ? "spin" : slewEma >= 1.35 ? "sweep" : "ok"
+        if first || next != slewKind {
+            slewKind = next
+            notifyListeners("slewChanged", data: slewPayload())
+        }
+    }
+
+    private func stopSlew() {
+        if slewMotion.isGyroActive {
+            slewMotion.stopGyroUpdates()
+        }
+        slewLive = false
+        slewRadPerSec = -1
+        slewEma = 0
+        slewKind = "ok"
+        slewSessionStart = 0
+    }
+
     private func detachArView() {
+        stopSlew()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
