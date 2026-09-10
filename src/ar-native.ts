@@ -1,5 +1,12 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import {
+  arSaveArm,
+  arSaveApplyClass,
+  arSaveCoach,
+  arSaveParseNative,
+  type ArSaveKind,
+} from "./ar-save";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -87,13 +94,25 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  let saveCoach: string | null = null;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const paintHint = () => {
+    if (saveCoach) overlay.hint.textContent = saveCoach;
+  };
+
+  const applySave = (kind: ArSaveKind, coach: string | null) => {
+    saveCoach = coach;
+    arSaveApplyClass(document.body, kind);
+    arSaveApplyClass(overlay.root, kind);
+    paintHint();
+  };
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    if (event.message && placed === 0 && !saveCoach) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
@@ -134,6 +153,31 @@ export async function startNativeAR(
 
   document.addEventListener("pointerdown", onTap);
 
+  const saveListener = await CubeAR.addListener("saveChanged", (data) => {
+    const parsed = arSaveParseNative(data);
+    applySave(parsed.kind, arSaveCoach(parsed.kind, "cubes"));
+  });
+  try {
+    const parsed = arSaveParseNative(await CubeAR.saveState());
+    applySave(parsed.kind, arSaveCoach(parsed.kind, "cubes"));
+  } catch {
+    /* plugin without saveState */
+  }
+  const saveArm = arSaveArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arSaveParseNative(await CubeAR.saveState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      applySave(kind, coach);
+    },
+  });
+
   const onExit = async () => {
     overlay.exit.disabled = true;
     try {
@@ -157,8 +201,12 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    saveArm.dispose();
+    await saveListener.remove();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
+    arSaveApplyClass(document.body, "ok");
+    arSaveApplyClass(overlay.root, "ok");
     document.body.classList.remove("ar-native-active");
     unwireDebug();
     resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

@@ -1,5 +1,6 @@
 import ARKit
 import Capacitor
+import Network
 import SceneKit
 import UIKit
 
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "saveState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,14 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var saveMonitor: NWPathMonitor?
+    private let saveQueue = DispatchQueue(label: "io.worldbuild.cube.save")
+    private var saveTimer: Timer?
+    private var saveKind = "ok"
+    private var saveRaw = "ok"
+    private var saveSince: TimeInterval = 0
+    private var saveFlag = false
+    private var meterFlag = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -107,6 +117,78 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startSaveWatch()
+    }
+
+    @objc func saveState(_ call: CAPPluginCall) {
+        call.resolve(savePayload())
+    }
+
+    private func savePayload() -> [String: Any] {
+        [
+            "kind": saveKind,
+            "save": saveFlag,
+            "meter": meterFlag,
+            "valid": true,
+        ]
+    }
+
+    private func startSaveWatch() {
+        stopSaveWatch()
+        saveKind = "ok"
+        saveRaw = "ok"
+        saveSince = 0
+        saveFlag = false
+        meterFlag = false
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                self?.saveFlag = path.isConstrained
+                self?.meterFlag = path.isExpensive
+                self?.tickSave(forceRaw: false)
+            }
+        }
+        monitor.start(queue: saveQueue)
+        saveMonitor = monitor
+        tickSave(forceRaw: false)
+        saveTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.tickSave(forceRaw: false)
+        }
+    }
+
+    private func stopSaveWatch() {
+        saveTimer?.invalidate()
+        saveTimer = nil
+        saveMonitor?.cancel()
+        saveMonitor = nil
+        saveKind = "ok"
+        saveFlag = false
+        meterFlag = false
+    }
+
+    private func tickSave(forceRaw: Bool) {
+        let raw = saveFlag ? "save" : (meterFlag ? "meter" : "ok")
+        let now = Date().timeIntervalSince1970 * 1000
+        if saveSince == 0 {
+            saveSince = now
+            saveRaw = raw
+            saveKind = "ok"
+            return
+        }
+        if forceRaw || raw != saveRaw {
+            saveRaw = raw
+            saveSince = now
+            if forceRaw {
+                saveKind = raw
+                notifyListeners("saveChanged", data: savePayload())
+            }
+            return
+        }
+        if raw == saveKind { return }
+        let need: TimeInterval = raw == "ok" ? 800 : 400
+        if now - saveSince < need { return }
+        saveKind = raw
+        notifyListeners("saveChanged", data: savePayload())
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +202,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopSaveWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

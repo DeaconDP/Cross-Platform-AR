@@ -1,5 +1,7 @@
 # TODO
 
+- [x] AR Low Data / constrained-path steward (`ar-save`) + native `saveState` / `saveChanged` (2026-09-10)
+- [ ] Physical device QA: Low Data Mode / Data Saver still places a cube
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)
