@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "wbState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var wbKind = "ok"
+    private var wbRaw = "ok"
+    private var wbSince = Date()
+    private var wbCct: Double = 0
+    private var wbValid = false
+    private var wbArmed = false
+    private var wbLast: TimeInterval = 0
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +52,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.wbKind = "ok"
+                self.wbRaw = "ok"
+                self.wbSince = Date()
+                self.wbCct = 0
+                self.wbValid = false
+                self.wbArmed = false
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -59,6 +73,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func wbState(_ call: CAPPluginCall) {
+        call.resolve(["kind": wbKind, "cct": wbCct, "valid": wbValid])
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -190,9 +208,45 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 extension CubeARPlugin: ARSCNViewDelegate, ARSessionDelegate {
     public func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         guard let view = arView, let frame = view.session.currentFrame else { return }
+        if time - wbLast > 0.4 {
+            wbLast = time
+            tickWb(frame)
+        }
         DispatchQueue.main.async { [weak self] in
             self?.updateReticle(in: view, frame: frame)
         }
+    }
+
+    private func kindFromCct(_ cct: Double?) -> String {
+        guard let cct, cct.isFinite else { return "ok" }
+        if cct < 3400 { return "warm" }
+        if cct > 7000 { return "cold" }
+        return "ok"
+    }
+
+    private func tickWb(_ frame: ARFrame) {
+        let kelvin = frame.lightEstimate?.ambientColorTemperature
+        let valid = kelvin != nil && kelvin! > 0
+        wbValid = valid
+        wbCct = valid ? Double(kelvin!) : 0
+        let raw = kindFromCct(valid ? Double(kelvin!) : nil)
+        let now = Date()
+        if !wbArmed {
+            wbArmed = true
+            wbRaw = raw
+            wbSince = now
+            return
+        }
+        if raw != wbRaw {
+            wbRaw = raw
+            wbSince = now
+            return
+        }
+        if raw == wbKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now.timeIntervalSince(wbSince) < need { return }
+        wbKind = raw
+        notifyListeners("wbChanged", data: ["kind": wbKind, "cct": wbCct, "valid": wbValid])
     }
 
     public func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
