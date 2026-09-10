@@ -223,6 +223,11 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+.ar-hint.is-ar-dock-desk,
+.ar-hint.is-ar-dock-charge {
+  max-width: 22rem;
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;
