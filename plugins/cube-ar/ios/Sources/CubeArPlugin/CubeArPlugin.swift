@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "dockState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var dockObserver: NSObjectProtocol?
+    private var dockTimer: Timer?
+    private var dockKind = "ok"
+    private var dockRaw = "ok"
+    private var dockSince: TimeInterval = 0
+    private var chargeFlag = false
+    private var deskFlag = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -107,6 +115,90 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startDockWatch()
+    }
+
+    @objc func dockState(_ call: CAPPluginCall) {
+        call.resolve(dockPayload())
+    }
+
+    private func dockPayload() -> [String: Any] {
+        [
+            "kind": dockKind,
+            "desk": deskFlag,
+            "charge": chargeFlag,
+            "valid": true,
+        ]
+    }
+
+    private func startDockWatch() {
+        stopDockWatch()
+        dockKind = "ok"
+        dockRaw = "ok"
+        dockSince = 0
+        chargeFlag = false
+        deskFlag = false
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        dockObserver = NotificationCenter.default.addObserver(
+            forName: UIDevice.batteryStateDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.readDockFlags()
+            self?.tickDock(forceRaw: false)
+        }
+        readDockFlags()
+        tickDock(forceRaw: false)
+        dockTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.readDockFlags()
+            self?.tickDock(forceRaw: false)
+        }
+    }
+
+    private func stopDockWatch() {
+        dockTimer?.invalidate()
+        dockTimer = nil
+        if let dockObserver {
+            NotificationCenter.default.removeObserver(dockObserver)
+        }
+        dockObserver = nil
+        dockKind = "ok"
+        chargeFlag = false
+        deskFlag = false
+        UIDevice.current.isBatteryMonitoringEnabled = false
+    }
+
+    private func readDockFlags() {
+        let state = UIDevice.current.batteryState
+        let charging = state == .charging || state == .full
+        chargeFlag = charging
+        let pad = UIDevice.current.userInterfaceIdiom == .pad
+        deskFlag = charging && (pad || state == .full)
+    }
+
+    private func tickDock(forceRaw: Bool) {
+        let raw = deskFlag ? "desk" : (chargeFlag ? "charge" : "ok")
+        let now = Date().timeIntervalSince1970
+        if dockSince == 0 {
+            dockSince = now
+            dockRaw = raw
+            dockKind = "ok"
+            return
+        }
+        if forceRaw || raw != dockRaw {
+            dockRaw = raw
+            dockSince = now
+            if forceRaw {
+                dockKind = raw
+                notifyListeners("dockChanged", data: dockPayload())
+            }
+            return
+        }
+        if raw == dockKind { return }
+        let need: TimeInterval = raw == "ok" ? 800 : 400
+        if now - dockSince < need { return }
+        dockKind = raw
+        notifyListeners("dockChanged", data: dockPayload())
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +212,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopDockWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

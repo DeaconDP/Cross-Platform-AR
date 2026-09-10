@@ -1,7 +1,14 @@
 package io.worldbuild.cubear.plugin
 
 import android.Manifest
+import android.app.UiModeManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.res.Configuration
+import android.os.BatteryManager
+import android.os.Build
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -67,6 +74,13 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var dockReceiver: BroadcastReceiver? = null
+    private var dockTick: Runnable? = null
+    private var dockKind = "ok"
+    private var dockRaw = "ok"
+    private var dockSince = 0L
+    private var chargeFlag = false
+    private var deskFlag = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -344,6 +358,7 @@ class CubeArPlugin : Plugin() {
             fun finishAttach() {
                 if (attachCompleted || arSceneView !== sceneView) return
                 attachCompleted = true
+                startDockWatch()
                 // Samsung One UI 8 / ARCore 1.54+: hold uncalibrated IMU open so
                 // Session.resume() does not hit "Failed to register sensor to queue 0".
                 startImuWarmup(activity)
@@ -625,7 +640,132 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    @PluginMethod
+    fun dockState(call: PluginCall) {
+        call.resolve(dockPayload())
+    }
+
+    private fun dockPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", dockKind)
+        o.put("desk", deskFlag)
+        o.put("charge", chargeFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startDockWatch() {
+        stopDockWatch()
+        dockKind = "ok"
+        dockRaw = "ok"
+        dockSince = 0
+        chargeFlag = false
+        deskFlag = false
+        readDockFlags()
+        tickDock(false)
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_DOCK_EVENT)
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+            addAction(Intent.ACTION_BATTERY_CHANGED)
+        }
+        dockReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                readDockFlags()
+                tickDock(false)
+            }
+        }
+        val ctx = context
+        if (Build.VERSION.SDK_INT >= 33) {
+            ctx.registerReceiver(dockReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            ctx.registerReceiver(dockReceiver, filter)
+        }
+        val tick = Runnable {
+            readDockFlags()
+            tickDock(false)
+            dockTick?.let { mainHandler.postDelayed(it, 800) }
+        }
+        dockTick = tick
+        mainHandler.postDelayed(tick, 800)
+    }
+
+    private fun stopDockWatch() {
+        dockTick?.let { mainHandler.removeCallbacks(it) }
+        dockTick = null
+        dockReceiver?.let {
+            try {
+                context.unregisterReceiver(it)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        dockReceiver = null
+        dockKind = "ok"
+        chargeFlag = false
+        deskFlag = false
+    }
+
+    private fun readDockFlags() {
+        var desk = false
+        var charge = false
+        val ctx = context
+        try {
+            val dock = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_DOCK_EVENT))
+            if (dock != null) {
+                val state = dock.getIntExtra(Intent.EXTRA_DOCK_STATE, Intent.EXTRA_DOCK_STATE_UNDOCKED)
+                desk = state == Intent.EXTRA_DOCK_STATE_DESK
+                    || state == Intent.EXTRA_DOCK_STATE_CAR
+                    || state == Intent.EXTRA_DOCK_STATE_LE_DESK
+                    || state == Intent.EXTRA_DOCK_STATE_HE_DESK
+            }
+            val um = ctx.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
+            if (um != null && um.currentModeType == Configuration.UI_MODE_TYPE_DESK) {
+                desk = true
+            }
+            val bat = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            if (bat != null) {
+                val plugged = bat.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
+                charge = plugged == BatteryManager.BATTERY_PLUGGED_AC
+                    || plugged == BatteryManager.BATTERY_PLUGGED_USB
+                    || plugged == BatteryManager.BATTERY_PLUGGED_WIRELESS
+            }
+        } catch (_: Exception) {
+            /* sticky intents can miss on some OEM builds */
+        }
+        if (desk) charge = true
+        deskFlag = desk
+        chargeFlag = charge
+    }
+
+    private fun tickDock(forceRaw: Boolean) {
+        val raw = if (deskFlag) "desk" else if (chargeFlag) "charge" else "ok"
+        val now = System.currentTimeMillis()
+        if (dockSince == 0L) {
+            dockSince = now
+            dockRaw = raw
+            dockKind = "ok"
+            return
+        }
+        if (forceRaw || raw != dockRaw) {
+            dockRaw = raw
+            dockSince = now
+            if (forceRaw) {
+                dockKind = raw
+                notifyListeners("dockChanged", dockPayload())
+            }
+            return
+        }
+        if (raw == dockKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - dockSince < need) return
+        dockKind = raw
+        notifyListeners("dockChanged", dockPayload())
+    }
+
     private fun detachArView() {
+        stopDockWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
