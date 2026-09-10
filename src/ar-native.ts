@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arQuietArm, arQuietParseNative } from "./ar-quiet";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -132,6 +133,30 @@ export async function startNativeAR(
     }
   };
 
+  const quietArm = arQuietArm({
+    product: "cubes",
+    root: overlay.hint,
+    getNative: async () => {
+      try {
+        return arQuietParseNative(await CubeAR.quietState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (_kind, coach) => {
+      if (coach && placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+      }
+    },
+  });
+  const quietListener = await CubeAR.addListener("quietChanged", (event) => {
+    const parsed = arQuietParseNative(event);
+    if (parsed.kind !== "ok" && placed === 0) {
+      overlay.hint.hidden = false;
+    }
+  }).catch(() => ({ remove: async () => undefined }));
+
   document.addEventListener("pointerdown", onTap);
 
   const onExit = async () => {
@@ -154,6 +179,8 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    quietArm.dispose();
+    await quietListener.remove();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
