@@ -2,8 +2,10 @@ package io.worldbuild.cubear.plugin
 
 import android.Manifest
 import android.content.Context
+import android.database.ContentObserver
 import android.graphics.Color
 import android.hardware.Sensor
+import android.provider.Settings
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
@@ -67,6 +69,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var invertObserver: ContentObserver? = null
+    private var invertKind = "ok"
+    private var invertRaw = "ok"
+    private var invertSince = 0L
+    private var invertOn = false
+    private var grayOn = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -190,6 +198,95 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun invertState(call: PluginCall) {
+        call.resolve(invertPayload())
+    }
+
+    private fun invertPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", invertKind)
+        o.put("invert", invertOn)
+        o.put("gray", grayOn)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun readSecureFlag(key: String): Boolean {
+        return try {
+            Settings.Secure.getInt(context.contentResolver, key, 0) == 1
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun startInvertWatch() {
+        stopInvertWatch()
+        invertKind = "ok"
+        invertRaw = "ok"
+        invertSince = 0L
+        invertObserver = object : ContentObserver(mainHandler) {
+            override fun onChange(selfChange: Boolean) {
+                tickInvert()
+            }
+        }
+        try {
+            val cr = context.contentResolver
+            invertObserver?.let { observer ->
+                cr.registerContentObserver(
+                    Settings.Secure.getUriFor("accessibility_display_inversion_enabled"),
+                    false,
+                    observer,
+                )
+                cr.registerContentObserver(
+                    Settings.Secure.getUriFor("accessibility_display_daltonizer_enabled"),
+                    false,
+                    observer,
+                )
+            }
+        } catch (_: Exception) {
+            /* settings may be restricted */
+        }
+        tickInvert()
+    }
+
+    private fun stopInvertWatch() {
+        invertObserver?.let { observer ->
+            try {
+                context.contentResolver.unregisterContentObserver(observer)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        invertObserver = null
+        invertKind = "ok"
+        invertOn = false
+        grayOn = false
+    }
+
+    private fun tickInvert() {
+        invertOn = readSecureFlag("accessibility_display_inversion_enabled")
+        grayOn = readSecureFlag("accessibility_display_daltonizer_enabled")
+        val raw = if (invertOn) "invert" else if (grayOn) "gray" else "ok"
+        val now = System.currentTimeMillis()
+        if (invertSince == 0L) {
+            invertSince = now
+            invertRaw = raw
+            invertKind = "ok"
+            return
+        }
+        if (raw != invertRaw) {
+            invertRaw = raw
+            invertSince = now
+            return
+        }
+        if (raw == invertKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - invertSince < need) return
+        invertKind = raw
+        notifyListeners("invertChanged", invertPayload())
     }
 
     @PluginMethod
@@ -353,6 +450,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        startInvertWatch()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -626,6 +724,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopInvertWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
