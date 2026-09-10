@@ -1,8 +1,13 @@
 package io.worldbuild.cubear.plugin
 
 import android.Manifest
+import android.app.NotificationManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
+import android.os.Build
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -67,6 +72,13 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var quietReceiver: BroadcastReceiver? = null
+    private var quietTick: Runnable? = null
+    private var quietKind = "ok"
+    private var quietRaw = "ok"
+    private var quietSince = 0L
+    private var sleepFlag = false
+    private var focusFlag = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -353,6 +365,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        startQuietWatch()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -625,7 +638,116 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    @PluginMethod
+    fun quietState(call: PluginCall) {
+        call.resolve(quietPayload())
+    }
+
+    private fun quietPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", quietKind)
+        o.put("sleep", sleepFlag)
+        o.put("focus", focusFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startQuietWatch() {
+        stopQuietWatch()
+        quietKind = "ok"
+        quietRaw = "ok"
+        quietSince = 0
+        sleepFlag = false
+        focusFlag = false
+        readQuietFlags()
+        tickQuiet(false)
+        val filter = IntentFilter()
+        filter.addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED)
+        quietReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                readQuietFlags()
+                tickQuiet(false)
+            }
+        }
+        val ctx = context
+        if (Build.VERSION.SDK_INT >= 33) {
+            ctx.registerReceiver(quietReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            ctx.registerReceiver(quietReceiver, filter)
+        }
+        val tick = object : Runnable {
+            override fun run() {
+                readQuietFlags()
+                tickQuiet(false)
+                mainHandler.postDelayed(this, 800)
+            }
+        }
+        quietTick = tick
+        mainHandler.postDelayed(tick, 800)
+    }
+
+    private fun stopQuietWatch() {
+        quietTick?.let { mainHandler.removeCallbacks(it) }
+        quietTick = null
+        quietReceiver?.let {
+            try {
+                context.unregisterReceiver(it)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        quietReceiver = null
+        quietKind = "ok"
+        sleepFlag = false
+        focusFlag = false
+    }
+
+    private fun readQuietFlags() {
+        var sleep = false
+        var focus = false
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            if (nm != null) {
+                val filter = nm.currentInterruptionFilter
+                sleep = filter == NotificationManager.INTERRUPTION_FILTER_NONE
+                    || filter == NotificationManager.INTERRUPTION_FILTER_ALARMS
+                focus = filter == NotificationManager.INTERRUPTION_FILTER_PRIORITY
+            }
+        } catch (_: Exception) {
+            /* OEM builds can hide zen */
+        }
+        if (sleep) focus = true
+        sleepFlag = sleep
+        focusFlag = focus
+    }
+
+    private fun tickQuiet(forceRaw: Boolean) {
+        val raw = if (sleepFlag) "sleep" else if (focusFlag) "focus" else "ok"
+        val now = System.currentTimeMillis()
+        if (quietSince == 0L) {
+            quietSince = now
+            quietRaw = raw
+            quietKind = "ok"
+            return
+        }
+        if (forceRaw || raw != quietRaw) {
+            quietRaw = raw
+            quietSince = now
+            if (forceRaw) {
+                quietKind = raw
+                notifyListeners("quietChanged", quietPayload())
+            }
+            return
+        }
+        if (raw == quietKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - quietSince < need) return
+        quietKind = raw
+        notifyListeners("quietChanged", quietPayload())
+    }
+
     private fun detachArView() {
+        stopQuietWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

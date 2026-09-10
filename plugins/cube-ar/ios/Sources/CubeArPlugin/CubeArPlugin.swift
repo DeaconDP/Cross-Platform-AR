@@ -1,5 +1,6 @@
 import ARKit
 import Capacitor
+import Intents
 import SceneKit
 import UIKit
 
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "quietState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var quietTimer: Timer?
+    private var quietKind = "ok"
+    private var quietRaw = "ok"
+    private var quietSince: TimeInterval = 0
+    private var sleepFlag = false
+    private var focusFlag = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -107,6 +115,77 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startQuietWatch()
+    }
+
+    @objc func quietState(_ call: CAPPluginCall) {
+        call.resolve(quietPayload())
+    }
+
+    private func quietPayload() -> [String: Any] {
+        [
+            "kind": quietKind,
+            "sleep": sleepFlag,
+            "focus": focusFlag,
+            "valid": true,
+        ]
+    }
+
+    private func startQuietWatch() {
+        stopQuietWatch()
+        quietKind = "ok"
+        quietRaw = "ok"
+        quietSince = 0
+        sleepFlag = false
+        focusFlag = false
+        readQuietFlags()
+        tickQuiet(forceRaw: false)
+        quietTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.readQuietFlags()
+            self?.tickQuiet(forceRaw: false)
+        }
+    }
+
+    private func stopQuietWatch() {
+        quietTimer?.invalidate()
+        quietTimer = nil
+        quietKind = "ok"
+        sleepFlag = false
+        focusFlag = false
+    }
+
+    private func readQuietFlags() {
+        var focused = false
+        if #available(iOS 15.0, *) {
+            focused = INFocusStatusCenter.default.focusStatus.isFocused
+        }
+        focusFlag = focused
+        sleepFlag = false
+    }
+
+    private func tickQuiet(forceRaw: Bool) {
+        let raw = sleepFlag ? "sleep" : (focusFlag ? "focus" : "ok")
+        let now = Date().timeIntervalSince1970
+        if quietSince == 0 {
+            quietSince = now
+            quietRaw = raw
+            quietKind = "ok"
+            return
+        }
+        if forceRaw || raw != quietRaw {
+            quietRaw = raw
+            quietSince = now
+            if forceRaw {
+                quietKind = raw
+                notifyListeners("quietChanged", data: quietPayload())
+            }
+            return
+        }
+        if raw == quietKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - quietSince < need { return }
+        quietKind = raw
+        notifyListeners("quietChanged", data: quietPayload())
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +199,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopQuietWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
