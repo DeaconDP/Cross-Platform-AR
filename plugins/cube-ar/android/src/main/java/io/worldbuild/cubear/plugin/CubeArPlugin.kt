@@ -1,8 +1,10 @@
 package io.worldbuild.cubear.plugin
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.graphics.Color
+import android.view.accessibility.AccessibilityManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -67,6 +69,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var readerKind = "ok"
+    private var readerRaw = "ok"
+    private var readerSince = 0L
+    private var readerExplore = false
+    private var readerSpeak = false
+    private var readerPoll: Runnable? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +156,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startReaderWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -193,7 +202,95 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun readerState(call: PluginCall) {
+        call.resolve(readerPayload())
+    }
+
+    private fun readerPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", readerKind)
+        o.put("explore", readerExplore)
+        o.put("speak", readerSpeak)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun readReaderFlags() {
+        readerExplore = false
+        readerSpeak = false
+        try {
+            val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+            if (am != null && am.isEnabled) {
+                readerExplore = am.isTouchExplorationEnabled
+                if (!readerExplore) {
+                    val spoken = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_SPOKEN)
+                    readerSpeak = !spoken.isNullOrEmpty()
+                } else {
+                    readerSpeak = true
+                }
+            }
+        } catch (_: Exception) {
+            /* stay false */
+        }
+    }
+
+    private fun startReaderWatch() {
+        stopReaderWatch()
+        readerKind = "ok"
+        readerRaw = "ok"
+        readerSince = 0L
+        val poll = object : Runnable {
+            override fun run() {
+                tickReader()
+                if (readerPoll != null) {
+                    mainHandler.postDelayed(this, 800)
+                }
+            }
+        }
+        readerPoll = poll
+        mainHandler.post(poll)
+    }
+
+    private fun stopReaderWatch() {
+        readerPoll?.let { mainHandler.removeCallbacks(it) }
+        readerPoll = null
+        readerKind = "ok"
+        readerExplore = false
+        readerSpeak = false
+    }
+
+    private fun tickReader() {
+        readReaderFlags()
+        val raw = if (readerExplore) "explore" else if (readerSpeak) "speak" else "ok"
+        val now = System.currentTimeMillis()
+        if (readerSince == 0L) {
+            readerSince = now
+            readerRaw = raw
+            readerKind = "ok"
+            return
+        }
+        if (raw != readerRaw) {
+            readerRaw = raw
+            readerSince = now
+            return
+        }
+        if (raw == readerKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - readerSince < need) return
+        readerKind = raw
+        notifyListeners("readerChanged", readerPayload())
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
+        if (readerKind == "explore") {
+            val result = JSObject()
+            result.put("placed", false)
+            result.put("count", placedCount)
+            result.put("explore", true)
+            call.resolve(result)
+            return
+        }
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")
             return
@@ -626,6 +723,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopReaderWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
