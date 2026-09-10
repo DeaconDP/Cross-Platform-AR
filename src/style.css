@@ -219,6 +219,11 @@ body.ar-native-active #ar-overlay {
   color: var(--text);
 }
 
+.ar-overlay.is-ar-palm-fat .ar-hint,
+.ar-overlay.is-ar-palm-smear .ar-hint {
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.75);
+}
+
 .ar-hint[hidden] {
   display: none;
 }

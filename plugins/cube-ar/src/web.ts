@@ -3,6 +3,7 @@ import type {
   CubeARPlugin,
   CubeARSessionOptions,
   CubeARSupportResult,
+  CubeARPalmState,
   CubeARTapOptions,
   CubeARTapResult,
 } from "./definitions";
@@ -22,5 +23,13 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
 
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
+  }
+
+  async palmState(): Promise<CubeARPalmState> {
+    return { kind: "ok", fat: false, smear: false, valid: false };
+  }
+
+  async notePalm(): Promise<CubeARPalmState> {
+    return { kind: "ok", fat: false, smear: false, valid: false };
   }
 }

@@ -15,11 +15,22 @@ export interface CubeARSessionOptions {
 export interface CubeARTapOptions {
   x: number;
   y: number;
+  major?: number;
+  pointers?: number;
 }
 
 export interface CubeARTapResult {
   placed: boolean;
   count: number;
+  fat?: boolean;
+  smear?: boolean;
+}
+
+export interface CubeARPalmState {
+  kind: string;
+  fat: boolean;
+  smear: boolean;
+  valid: boolean;
 }
 
 export interface CubeARTrackingEvent {
@@ -32,9 +43,15 @@ export interface CubeARPlugin {
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  palmState(): Promise<CubeARPalmState>;
+  notePalm(options: { major?: number; pointers?: number }): Promise<CubeARPalmState>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "palmChanged",
+    listenerFunc: (event: CubeARPalmState) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     eventName: "sessionEnded",

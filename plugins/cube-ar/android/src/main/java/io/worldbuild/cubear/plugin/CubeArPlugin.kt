@@ -67,6 +67,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var palmKind = "ok"
+    private var palmRaw = "ok"
+    private var palmSince = 0L
+    private var palmFat = false
+    private var palmSmear = false
+    private var palmPoll: Runnable? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +154,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startPalmWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -183,6 +190,86 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun palmState(call: PluginCall) {
+        call.resolve(palmPayload())
+    }
+
+    @PluginMethod
+    fun notePalm(call: PluginCall) {
+        applyPalmCall(call)
+        call.resolve(palmPayload())
+    }
+
+    private fun palmPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", palmKind)
+        o.put("fat", palmFat)
+        o.put("smear", palmSmear)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun applyPalmCall(call: PluginCall) {
+        val major = call.getDouble("major") ?: 0.0
+        val pointers = call.getInt("pointers") ?: 1
+        palmFat = major >= 48.0
+        palmSmear = pointers >= 3
+        tickPalm(true)
+    }
+
+    private fun startPalmWatch() {
+        stopPalmWatch()
+        palmKind = "ok"
+        palmRaw = "ok"
+        palmSince = 0
+        palmFat = false
+        palmSmear = false
+        val poll = object : Runnable {
+            override fun run() {
+                tickPalm(false)
+                if (palmPoll != null) {
+                    mainHandler.postDelayed(this, 800)
+                }
+            }
+        }
+        palmPoll = poll
+        mainHandler.post(poll)
+    }
+
+    private fun stopPalmWatch() {
+        palmPoll?.let { mainHandler.removeCallbacks(it) }
+        palmPoll = null
+        palmKind = "ok"
+        palmFat = false
+        palmSmear = false
+    }
+
+    private fun tickPalm(forceRaw: Boolean) {
+        val raw = if (palmSmear) "smear" else if (palmFat) "fat" else "ok"
+        val now = System.currentTimeMillis()
+        if (palmSince == 0L) {
+            palmSince = now
+            palmRaw = raw
+            palmKind = "ok"
+            return
+        }
+        if (forceRaw || raw != palmRaw) {
+            palmRaw = raw
+            palmSince = now
+            if (forceRaw && raw != "ok") {
+                palmKind = raw
+                notifyListeners("palmChanged", palmPayload())
+            }
+            return
+        }
+        if (raw == palmKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - palmSince < need) return
+        palmKind = raw
+        notifyListeners("palmChanged", palmPayload())
+    }
+
+    @PluginMethod
     fun stopSession(call: PluginCall) {
         pendingStartCall = null
         bridge.executeOnMainThread {
@@ -202,11 +289,19 @@ class CubeArPlugin : Plugin() {
             call.reject("Missing tap y")
             return
         }
+        applyPalmCall(call)
 
         bridge.executeOnMainThread {
+            if (palmKind == "fat" || palmKind == "smear") {
+                val result = palmPayload()
+                result.put("placed", false)
+                result.put("count", placedCount)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
             val view = arSceneView
             if (view == null) {
-                val result = JSObject()
+                val result = palmPayload()
                 result.put("placed", false)
                 result.put("count", placedCount)
                 call.resolve(result)
@@ -626,6 +721,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopPalmWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

@@ -1,6 +1,15 @@
 import * as THREE from "three";
 import { createCube, createLights } from "./scene";
 import {
+  arPalmArm,
+  arPalmBlocksPlace,
+  arPalmCoach,
+  arPalmFromContact,
+  arPalmKindFromFlags,
+  arPalmNoteWeb,
+  type ArPalmKind,
+} from "./ar-palm";
+import {
   type CompatSnapshot,
   DebugCollector,
   resetDebugOverlay,
@@ -72,11 +81,40 @@ export async function startWebXR(
   const unbindSession = debug.bindSession(session);
 
   let placed = 0;
+  let palmKind: ArPalmKind = "ok";
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const palmArm = arPalmArm({
+    product: "cubes",
+    root: overlay.root,
+    onKind: (kind, coach) => {
+      palmKind = kind;
+      if (coach && placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+      }
+    },
+  });
+  const onPalmPointer = (event: PointerEvent) => {
+    const contact = arPalmFromContact({
+      widthPx: event.width,
+      heightPx: event.height,
+      pointers: 1,
+    });
+    arPalmNoteWeb(contact);
+    const kind = arPalmKindFromFlags(contact);
+    if (kind !== "ok") palmKind = kind;
+  };
+  overlay.root.addEventListener("pointerdown", onPalmPointer);
 
   session.addEventListener("select", () => {
+    if (arPalmBlocksPlace(palmKind, "cubes")) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent =
+        arPalmCoach(palmKind, "cubes") ?? "Lift your hand, then tap a surface.";
+      return;
+    }
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
@@ -94,6 +132,8 @@ export async function startWebXR(
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    overlay.root.removeEventListener("pointerdown", onPalmPointer);
+    palmArm.dispose();
     unwireDebug();
     unbindSession();
     await session.end();
@@ -157,6 +197,8 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  overlay.root.removeEventListener("pointerdown", onPalmPointer);
+  palmArm.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

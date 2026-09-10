@@ -2,6 +2,16 @@ import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
+  arPalmArm,
+  arPalmBlocksPlace,
+  arPalmCoach,
+  arPalmFromContact,
+  arPalmKindFromFlags,
+  arPalmNoteWeb,
+  arPalmParseNative,
+  type ArPalmKind,
+} from "./ar-palm";
+import {
   type CompatSnapshot,
   DebugCollector,
   resetDebugOverlay,
@@ -87,9 +97,36 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  let palmKind: ArPalmKind = "ok";
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const palmArm = arPalmArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arPalmParseNative(await CubeAR.palmState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      palmKind = kind;
+      if (coach && placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+      }
+    },
+  });
+  const palmListener = await CubeAR.addListener("palmChanged", (event) => {
+    palmKind = arPalmParseNative(event).kind;
+    const coach = arPalmCoach(palmKind, "cubes");
+    if (coach && placed === 0) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = coach;
+    }
+  }).catch(() => null);
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -114,13 +151,41 @@ export async function startNativeAR(
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
 
+    const contact = arPalmFromContact({
+      widthPx: event.width,
+      heightPx: event.height,
+      pointers: 1,
+    });
+    arPalmNoteWeb(contact);
+    const kind = arPalmKindFromFlags(contact);
+    if (kind !== "ok") palmKind = kind;
+    void CubeAR.notePalm({
+      major: Math.max(event.width || 0, event.height || 0),
+      pointers: 1,
+    }).catch(() => undefined);
+    if (arPalmBlocksPlace(palmKind, "cubes")) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent =
+        arPalmCoach(palmKind, "cubes") ?? "Lift your hand, then tap a surface.";
+      return;
+    }
+
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
     try {
       const result = await CubeAR.onScreenTap({
         x: event.clientX * dpr,
         y: event.clientY * dpr,
+        major: Math.max(event.width || 0, event.height || 0),
+        pointers: 1,
       });
+      if (result.fat || result.smear) {
+        palmKind = result.smear ? "smear" : "fat";
+        overlay.hint.hidden = false;
+        overlay.hint.textContent =
+          arPalmCoach(palmKind, "cubes") ?? "Lift your hand, then tap a surface.";
+        return;
+      }
       if (result.placed) {
         placed = result.count;
         overlay.count.textContent = String(placed);
@@ -157,6 +222,8 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    palmArm.dispose();
+    await palmListener?.remove();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
