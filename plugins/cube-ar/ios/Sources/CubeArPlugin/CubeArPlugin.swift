@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "calmState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var calmKind = "ok"
+    private var calmRaw = "ok"
+    private var calmSince: TimeInterval = 0
+    private var calmReduce = false
+    private var calmFade = false
+    private var calmTimer: Timer?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -107,6 +114,76 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startCalmWatch()
+    }
+
+    @objc func calmState(_ call: CAPPluginCall) {
+        call.resolve(calmPayload())
+    }
+
+    private func calmPayload() -> [String: Any] {
+        [
+            "kind": calmKind,
+            "reduce": calmReduce,
+            "fade": calmFade,
+            "valid": true,
+        ]
+    }
+
+    private func readCalmFlags() -> (Bool, Bool) {
+        let reduce = UIAccessibility.isReduceMotionEnabled
+        let fade = UIAccessibility.prefersCrossFadeTransitions && !reduce
+        return (reduce, fade)
+    }
+
+    private func startCalmWatch() {
+        stopCalmWatch()
+        calmKind = "ok"
+        calmRaw = "ok"
+        calmSince = 0
+        let flags = readCalmFlags()
+        calmReduce = flags.0
+        calmFade = flags.1
+        tickCalm(forceRaw: false)
+        calmTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.tickCalm(forceRaw: false)
+        }
+    }
+
+    private func stopCalmWatch() {
+        calmTimer?.invalidate()
+        calmTimer = nil
+        calmKind = "ok"
+        calmReduce = false
+        calmFade = false
+    }
+
+    private func tickCalm(forceRaw: Bool) {
+        let flags = readCalmFlags()
+        calmReduce = flags.0
+        calmFade = flags.1
+        let raw = calmReduce ? "reduce" : (calmFade ? "fade" : "ok")
+        let now = Date().timeIntervalSince1970 * 1000
+        if calmSince == 0 {
+            calmSince = now
+            calmRaw = raw
+            calmKind = "ok"
+            return
+        }
+        if forceRaw || raw != calmRaw {
+            calmRaw = raw
+            calmSince = now
+            if forceRaw {
+                calmKind = raw
+                notifyListeners("calmChanged", data: calmPayload())
+            }
+            return
+        }
+        if raw == calmKind { return }
+        let need: TimeInterval = raw == "ok" ? 800 : 400
+        if now - calmSince < need { return }
+        calmKind = raw
+        notifyListeners("calmChanged", data: calmPayload())
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +197,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopCalmWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

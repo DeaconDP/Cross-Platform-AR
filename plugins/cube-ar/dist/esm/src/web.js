@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async calmState() {
+        return { kind: "ok", reduce: false, fade: false, valid: false };
+    }
 }

@@ -9,6 +9,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +68,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var calmKind = "ok"
+    private var calmRaw = "ok"
+    private var calmSince = 0L
+    private var calmReduce = false
+    private var calmFade = false
+    private var calmPoll: Runnable? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +155,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startCalmWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -190,6 +198,99 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun calmState(call: PluginCall) {
+        call.resolve(calmPayload())
+    }
+
+    private fun calmPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", calmKind)
+        o.put("reduce", calmReduce)
+        o.put("fade", calmFade)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun readCalmReduce(): Boolean {
+        return try {
+            val cr = context.contentResolver
+            val animator = Settings.Global.getFloat(cr, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+            val transition = Settings.Global.getFloat(cr, Settings.Global.TRANSITION_ANIMATION_SCALE, 1f)
+            val window = Settings.Global.getFloat(cr, Settings.Global.WINDOW_ANIMATION_SCALE, 1f)
+            val remove = Settings.Global.getInt(cr, "remove_animations", 0)
+            remove == 1 || animator == 0f || transition == 0f || window == 0f
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun readCalmFade(): Boolean {
+        if (readCalmReduce()) return false
+        return try {
+            val cr = context.contentResolver
+            val animator = Settings.Global.getFloat(cr, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+            val transition = Settings.Global.getFloat(cr, Settings.Global.TRANSITION_ANIMATION_SCALE, 1f)
+            (animator > 0f && animator < 1f) || (transition > 0f && transition < 1f)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun startCalmWatch() {
+        stopCalmWatch()
+        calmKind = "ok"
+        calmRaw = "ok"
+        calmSince = 0
+        calmReduce = false
+        calmFade = false
+        val poll = object : Runnable {
+            override fun run() {
+                tickCalm(false)
+                if (calmPoll != null) {
+                    mainHandler.postDelayed(this, 800)
+                }
+            }
+        }
+        calmPoll = poll
+        mainHandler.post(poll)
+    }
+
+    private fun stopCalmWatch() {
+        calmPoll?.let { mainHandler.removeCallbacks(it) }
+        calmPoll = null
+        calmKind = "ok"
+        calmReduce = false
+        calmFade = false
+    }
+
+    private fun tickCalm(forceRaw: Boolean) {
+        calmReduce = readCalmReduce()
+        calmFade = readCalmFade()
+        val raw = if (calmReduce) "reduce" else if (calmFade) "fade" else "ok"
+        val now = System.currentTimeMillis()
+        if (calmSince == 0L) {
+            calmSince = now
+            calmRaw = raw
+            calmKind = "ok"
+            return
+        }
+        if (forceRaw || raw != calmRaw) {
+            calmRaw = raw
+            calmSince = now
+            if (forceRaw) {
+                calmKind = raw
+                notifyListeners("calmChanged", calmPayload())
+            }
+            return
+        }
+        if (raw == calmKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - calmSince < need) return
+        calmKind = raw
+        notifyListeners("calmChanged", calmPayload())
     }
 
     @PluginMethod
@@ -626,6 +727,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopCalmWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
