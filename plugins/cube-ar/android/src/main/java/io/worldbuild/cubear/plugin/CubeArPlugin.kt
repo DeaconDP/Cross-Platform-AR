@@ -9,9 +9,11 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.accessibility.AccessibilityManager
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.Lifecycle
@@ -67,6 +69,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var loupeKind = "ok"
+    private var loupeRaw = "ok"
+    private var loupeSince = 0L
+    private var loupeAssist = false
+    private var loupeZoom = false
+    private var loupePoll: Runnable? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -193,6 +201,98 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun loupeState(call: PluginCall) {
+        call.resolve(loupePayload())
+    }
+
+    private fun loupePayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", loupeKind)
+        o.put("assist", loupeAssist)
+        o.put("zoom", loupeZoom)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun readLoupeFlags() {
+        loupeAssist = false
+        loupeZoom = false
+        try {
+            val cr = context.contentResolver
+            val mag = Settings.Secure.getInt(cr, "accessibility_display_magnification_enabled", 0)
+            val magNav = Settings.Secure.getInt(cr, "accessibility_display_magnification_navbar_enabled", 0)
+            val oneHand = Settings.Secure.getInt(cr, "one_handed_mode_activated", 0)
+            val anyScreen = try {
+                Settings.System.getInt(cr, "any_screen_running", 0)
+            } catch (_: Exception) {
+                0
+            }
+            loupeZoom = mag == 1 || magNav == 1 || oneHand == 1 || anyScreen == 1
+            val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+            val talkBack = am?.isTouchExplorationEnabled == true
+            if (!talkBack) {
+                val targets = Settings.Secure.getString(cr, "accessibility_button_targets")
+                val buttonMode = Settings.Secure.getInt(cr, "accessibility_button_mode", 0)
+                val assistantMenu = try {
+                    Settings.System.getInt(cr, "assistant_menu", 0)
+                } catch (_: Exception) {
+                    0
+                }
+                loupeAssist = assistantMenu == 1 || !targets.isNullOrEmpty() || buttonMode == 1
+            }
+        } catch (_: Exception) {
+            /* stay false */
+        }
+    }
+
+    private fun startLoupeWatch() {
+        stopLoupeWatch()
+        loupeKind = "ok"
+        loupeRaw = "ok"
+        loupeSince = 0
+        val poll = object : Runnable {
+            override fun run() {
+                tickLoupe()
+                if (loupePoll != null) {
+                    mainHandler.postDelayed(this, 800)
+                }
+            }
+        }
+        loupePoll = poll
+        mainHandler.post(poll)
+    }
+
+    private fun stopLoupeWatch() {
+        loupePoll?.let { mainHandler.removeCallbacks(it) }
+        loupePoll = null
+        loupeKind = "ok"
+        loupeAssist = false
+        loupeZoom = false
+    }
+
+    private fun tickLoupe() {
+        readLoupeFlags()
+        val raw = if (loupeZoom) "zoom" else if (loupeAssist) "assist" else "ok"
+        val now = System.currentTimeMillis()
+        if (loupeSince == 0L) {
+            loupeSince = now
+            loupeRaw = raw
+            loupeKind = "ok"
+            return
+        }
+        if (raw != loupeRaw) {
+            loupeRaw = raw
+            loupeSince = now
+            return
+        }
+        if (raw == loupeKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - loupeSince < need) return
+        loupeKind = raw
+        notifyListeners("loupeChanged", loupePayload())
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")
@@ -204,6 +304,14 @@ class CubeArPlugin : Plugin() {
         }
 
         bridge.executeOnMainThread {
+            if (loupeKind == "zoom") {
+                val result = JSObject()
+                result.put("placed", false)
+                result.put("zoom", true)
+                result.put("count", placedCount)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
             val view = arSceneView
             if (view == null) {
                 val result = JSObject()
@@ -353,6 +461,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        startLoupeWatch()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -626,6 +735,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopLoupeWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

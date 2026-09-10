@@ -223,6 +223,10 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+.is-ar-loupe-assist .ar-exit {
+  margin-right: 56px;
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;
