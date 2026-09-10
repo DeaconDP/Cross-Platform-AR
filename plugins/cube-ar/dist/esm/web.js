@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async walkState() {
+        return { live: false, speedMps: -1, stepHz: -1, walk: false, ride: false };
+    }
 }

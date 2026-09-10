@@ -2,13 +2,16 @@ package io.worldbuild.cubear.plugin
 
 import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.location.LocationManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +70,18 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var walkManager: SensorManager? = null
+    private var walkListener: SensorEventListener? = null
+    private var walkLive = false
+    private var walkWalk = false
+    private var walkRide = false
+    private var walkSpeedMps = -1f
+    private var walkStepHz = -1f
+    private var walkKind = "ok"
+    private var walkSessionStartMs = 0L
+    private val walkSamples = FloatArray(24)
+    private var walkSampleCount = 0
+    private var walkSampleAt = 0
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -193,7 +208,20 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun walkState(call: PluginCall) {
+        call.resolve(walkPayload())
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
+        if (isWalkRide()) {
+            val result = JSObject()
+            result.put("placed", false)
+            result.put("count", placedCount)
+            result.put("ride", true)
+            call.resolve(result)
+            return
+        }
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")
             return
@@ -347,6 +375,7 @@ class CubeArPlugin : Plugin() {
                 // Samsung One UI 8 / ARCore 1.54+: hold uncalibrated IMU open so
                 // Session.resume() does not hit "Failed to register sensor to queue 0".
                 startImuWarmup(activity)
+                startWalk()
                 sceneView.postDelayed({
                     if (arSceneView !== sceneView) return@postDelayed
                     try {
@@ -458,6 +487,129 @@ class CubeArPlugin : Plugin() {
         if (registered == 0) return
         sensorManager = sm
         imuWarmupListener = listener
+    }
+
+    private fun walkPayload(): JSObject {
+        val o = JSObject()
+        o.put("live", walkLive)
+        o.put("speedMps", walkSpeedMps.toDouble())
+        o.put("stepHz", walkStepHz.toDouble())
+        o.put("walk", walkWalk)
+        o.put("ride", walkRide)
+        o.put("kind", walkKind)
+        o.put("blockPlace", isWalkRide())
+        o.put("placed", placedCount > 0)
+        o.put(
+            "sessionMs",
+            if (walkSessionStartMs == 0L) -1
+            else SystemClock.elapsedRealtime() - walkSessionStartMs,
+        )
+        return o
+    }
+
+    private fun isWalkRide(): Boolean {
+        if (!walkLive || walkSessionStartMs == 0L) return false
+        val sessionMs = SystemClock.elapsedRealtime() - walkSessionStartMs
+        return sessionMs >= 1200 && (walkRide || walkSpeedMps >= 4f)
+    }
+
+    private fun refreshWalkSpeed() {
+        try {
+            val fine =
+                context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+                    PackageManager.PERMISSION_GRANTED
+            val coarse =
+                context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                    PackageManager.PERMISSION_GRANTED
+            if (!fine && !coarse) return
+            val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
+            val loc =
+                try {
+                    lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                } catch (_: SecurityException) {
+                    null
+                } ?: try {
+                    lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                } catch (_: SecurityException) {
+                    null
+                }
+            if (loc != null && loc.hasSpeed()) walkSpeedMps = loc.speed
+        } catch (_: Exception) {
+            // optional
+        }
+    }
+
+    private fun startWalk() {
+        stopWalk()
+        walkSessionStartMs = SystemClock.elapsedRealtime()
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+        var sensor = sm.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+        var subtractG = false
+        if (sensor == null) {
+            sensor = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            subtractG = true
+        }
+        if (sensor == null) return
+        val listener =
+            object : SensorEventListener {
+                override fun onSensorChanged(event: SensorEvent) {
+                    val x = event.values[0]
+                    val y = event.values[1]
+                    val z = event.values[2]
+                    var mag = kotlin.math.sqrt((x * x + y * y + z * z).toDouble()).toFloat()
+                    if (subtractG) mag = kotlin.math.abs(mag - 9.81f)
+                    noteWalkAccel(mag)
+                }
+
+                override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+            }
+        sm.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
+        walkManager = sm
+        walkListener = listener
+    }
+
+    private fun noteWalkAccel(mag: Float) {
+        walkSamples[walkSampleAt] = mag
+        walkSampleAt = (walkSampleAt + 1) % walkSamples.size
+        if (walkSampleCount < walkSamples.size) walkSampleCount++
+        var sum = 0f
+        for (i in 0 until walkSampleCount) {
+            val v = walkSamples[i]
+            sum += v * v
+        }
+        val rms = kotlin.math.sqrt((sum / walkSampleCount.coerceAtLeast(1)).toDouble()).toFloat()
+        val first = !walkLive
+        walkLive = true
+        refreshWalkSpeed()
+        walkWalk = rms >= 1.55f && walkSpeedMps < 4f
+        walkRide = walkSpeedMps >= 4f
+        val next = if (walkRide) "ride" else if (walkWalk) "walk" else "ok"
+        if (first || next != walkKind) {
+            walkKind = next
+            notifyListeners("walkChanged", walkPayload())
+        }
+    }
+
+    private fun stopWalk() {
+        val listener = walkListener
+        if (listener != null) {
+            try {
+                walkManager?.unregisterListener(listener)
+            } catch (_: Exception) {
+                // already gone
+            }
+        }
+        walkManager = null
+        walkListener = null
+        walkLive = false
+        walkWalk = false
+        walkRide = false
+        walkSpeedMps = -1f
+        walkStepHz = -1f
+        walkKind = "ok"
+        walkSessionStartMs = 0L
+        walkSampleCount = 0
+        walkSampleAt = 0
     }
 
     private fun stopImuWarmup() {
@@ -629,6 +781,7 @@ class CubeArPlugin : Plugin() {
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
+        stopWalk()
         stopImuWarmup()
         arSceneView?.let { view ->
             safeDestroySceneView(view)

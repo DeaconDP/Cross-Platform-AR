@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arArmWalk, arParseWalkMotion, arWalkRms } from "./ar-walk";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -75,16 +76,49 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const accel: number[] = [];
+  const onMotion = (ev: DeviceMotionEvent) => {
+    const a = ev.acceleration;
+    if (!a) return;
+    accel.push(Math.hypot(a.x ?? 0, a.y ?? 0, a.z ?? 0));
+    if (accel.length > 24) accel.shift();
+  };
+  window.addEventListener("devicemotion", onMotion, { passive: true });
+  const sessionStart = performance.now();
+  const walk = arArmWalk({
+    product: "cubes",
+    useWeb: true,
+    getWebSample: () =>
+      arParseWalkMotion({
+        live: accel.length > 4,
+        rms: arWalkRms(accel),
+        sessionMs: performance.now() - sessionStart,
+        placed: placed > 0,
+      }),
+    onChange: (judge) => {
+      if (judge.coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = judge.coach;
+      }
+    },
+  });
 
   session.addEventListener("select", () => {
+    if (walk.snapshot().blockPlace) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent =
+        walk.snapshot().coach || "Stop first. AR cannot track from a moving seat.";
+      return;
+    }
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
     cube.rotateY(Math.random() * Math.PI * 2);
     scene.add(cube);
     placed++;
+    walk.setPlaced(true);
     overlay.count.textContent = String(placed);
-    overlay.hint.hidden = true;
+    if (!walk.snapshot().coach) overlay.hint.hidden = true;
     debug.logEvent(`cube placed (#${placed})`);
   });
 
@@ -94,6 +128,8 @@ export async function startWebXR(
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    walk.dispose();
+    window.removeEventListener("devicemotion", onMotion);
     unwireDebug();
     unbindSession();
     await session.end();
@@ -157,6 +193,8 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  walk.dispose();
+  window.removeEventListener("devicemotion", onMotion);
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
