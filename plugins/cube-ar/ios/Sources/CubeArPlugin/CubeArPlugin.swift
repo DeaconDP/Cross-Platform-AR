@@ -1,5 +1,7 @@
 import ARKit
 import Capacitor
+import CoreLocation
+import CoreMotion
 import SceneKit
 import UIKit
 
@@ -12,6 +14,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "walkState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +23,16 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private let walkActivity = CMMotionActivityManager()
+    private let walkPedometer = CMPedometer()
+    private let walkLoc = CLLocationManager()
+    private var walkLive = false
+    private var walkWalk = false
+    private var walkRide = false
+    private var walkSpeedMps: Double = -1
+    private var walkStepHz: Double = -1
+    private var walkKind = "ok"
+    private var walkSessionStart: TimeInterval = 0
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -61,6 +74,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func walkState(_ call: CAPPluginCall) {
+        call.resolve(walkPayload())
+    }
+
     @objc func onScreenTap(_ call: CAPPluginCall) {
         guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
             call.reject("Missing tap coordinates")
@@ -68,8 +85,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, let view = self.arView else {
-                call.resolve(["placed": false, "count": self?.placedCount ?? 0])
+            guard let self = self else { return }
+            if self.isWalkRide() {
+                call.resolve(["placed": false, "count": self.placedCount, "ride": true])
+                return
+            }
+            guard let view = self.arView else {
+                call.resolve(["placed": false, "count": self.placedCount])
                 return
             }
 
@@ -107,6 +129,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startWalk()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -119,7 +142,95 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func walkPayload() -> [String: Any] {
+        let sessionMs = walkSessionStart == 0
+            ? -1
+            : (ProcessInfo.processInfo.systemUptime - walkSessionStart) * 1000
+        return [
+            "live": walkLive,
+            "speedMps": walkSpeedMps,
+            "stepHz": walkStepHz,
+            "walk": walkWalk,
+            "ride": walkRide,
+            "kind": walkKind,
+            "blockPlace": isWalkRide(),
+            "placed": placedCount > 0,
+            "sessionMs": sessionMs,
+        ]
+    }
+
+    private func isWalkRide() -> Bool {
+        guard walkLive, walkSessionStart > 0 else { return false }
+        let sessionMs = (ProcessInfo.processInfo.systemUptime - walkSessionStart) * 1000
+        return sessionMs >= 1200 && (walkRide || walkSpeedMps >= 4)
+    }
+
+    private func startWalk() {
+        stopWalk()
+        walkSessionStart = ProcessInfo.processInfo.systemUptime
+        if CMMotionActivityManager.isActivityAvailable() {
+            walkActivity.startActivityUpdates(to: .main) { [weak self] act in
+                guard let self, let act else { return }
+                self.walkLive = true
+                self.walkRide = act.automotive || act.cycling
+                self.walkWalk = act.walking || act.running
+                self.refreshWalkSpeed()
+                self.emitWalk()
+            }
+        }
+        if CMPedometer.isStepCountingAvailable() {
+            walkPedometer.startUpdates(from: Date()) { [weak self] data, _ in
+                guard let self, let data else { return }
+                let dt = data.endDate.timeIntervalSince(data.startDate)
+                if dt > 0.4 {
+                    self.walkStepHz = data.numberOfSteps.doubleValue / dt
+                    self.walkLive = true
+                    self.emitWalk()
+                }
+            }
+        }
+        refreshWalkSpeed()
+    }
+
+    private func refreshWalkSpeed() {
+        let status: CLAuthorizationStatus
+        if #available(iOS 14.0, *) {
+            status = walkLoc.authorizationStatus
+        } else {
+            status = CLLocationManager.authorizationStatus()
+        }
+        guard status == .authorizedWhenInUse || status == .authorizedAlways else { return }
+        if let loc = walkLoc.location, loc.speed >= 0 {
+            walkSpeedMps = loc.speed
+            if loc.speed >= 4 { walkRide = true }
+        }
+    }
+
+    private func emitWalk() {
+        if walkRide || walkSpeedMps >= 4 {
+            walkKind = "ride"
+        } else if walkWalk || walkStepHz >= 1.15 {
+            walkKind = "walk"
+        } else {
+            walkKind = "ok"
+        }
+        notifyListeners("walkChanged", data: walkPayload())
+    }
+
+    private func stopWalk() {
+        walkActivity.stopActivityUpdates()
+        walkPedometer.stopUpdates()
+        walkLive = false
+        walkWalk = false
+        walkRide = false
+        walkSpeedMps = -1
+        walkStepHz = -1
+        walkKind = "ok"
+        walkSessionStart = 0
+    }
+
     private func detachArView() {
+        stopWalk()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

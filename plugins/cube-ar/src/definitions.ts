@@ -20,6 +20,19 @@ export interface CubeARTapOptions {
 export interface CubeARTapResult {
   placed: boolean;
   count: number;
+  ride?: boolean;
+}
+
+export interface CubeARWalkState {
+  live?: boolean;
+  speedMps?: number;
+  stepHz?: number;
+  walk?: boolean;
+  ride?: boolean;
+  sessionMs?: number;
+  kind?: string;
+  blockPlace?: boolean;
+  placed?: boolean;
 }
 
 export interface CubeARTrackingEvent {
@@ -32,6 +45,7 @@ export interface CubeARPlugin {
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  walkState(): Promise<CubeARWalkState>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +53,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "walkChanged",
+    listenerFunc: (event: CubeARWalkState) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }
