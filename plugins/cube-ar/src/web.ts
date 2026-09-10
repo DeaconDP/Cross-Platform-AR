@@ -23,4 +23,8 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
   }
+
+  async captionState() {
+    return { kind: "ok", caps: false, aid: false, valid: false };
+  }
 }

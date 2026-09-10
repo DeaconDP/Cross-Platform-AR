@@ -7,9 +7,14 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
+import android.view.accessibility.CaptioningManager
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.widget.FrameLayout
@@ -67,6 +72,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var captionKind = "ok"
+    private var captionRaw = "ok"
+    private var captionSince = 0L
+    private var captionCaps = false
+    private var captionAid = false
+    private var captionPoll: Runnable? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -149,6 +160,7 @@ class CubeArPlugin : Plugin() {
                 attachArView(
                     onReady = {
                         notifyTracking("initializing", "Starting ARCore session")
+                        startCaptionWatch()
                         call.resolve()
                     },
                     onFailed = { ex ->
@@ -190,6 +202,98 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun captionState(call: PluginCall) {
+        call.resolve(captionPayload())
+    }
+
+    private fun captionPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", captionKind)
+        o.put("caps", captionCaps)
+        o.put("aid", captionAid)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun readCaptionFlags() {
+        captionCaps = false
+        captionAid = false
+        try {
+            val cm = context.getSystemService(Context.CAPTIONING_SERVICE) as? CaptioningManager
+            if (cm?.isEnabled == true) captionCaps = true
+        } catch (_: Exception) {
+            /* stay */
+        }
+        try {
+            if (Settings.Secure.getInt(context.contentResolver, "odi_captions_enabled", 0) == 1) {
+                captionCaps = true
+            }
+        } catch (_: Exception) {
+            /* stay */
+        }
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            if (am != null && Build.VERSION.SDK_INT >= 23) {
+                for (d in am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+                    if (Build.VERSION.SDK_INT >= 28 && d.type == AudioDeviceInfo.TYPE_HEARING_AID) {
+                        captionAid = true
+                        break
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            /* stay */
+        }
+    }
+
+    private fun startCaptionWatch() {
+        stopCaptionWatch()
+        captionKind = "ok"
+        captionRaw = "ok"
+        captionSince = 0L
+        val poll = object : Runnable {
+            override fun run() {
+                tickCaption()
+                if (captionPoll === this) {
+                    mainHandler.postDelayed(this, 800)
+                }
+            }
+        }
+        captionPoll = poll
+        mainHandler.post(poll)
+    }
+
+    private fun stopCaptionWatch() {
+        captionPoll?.let { mainHandler.removeCallbacks(it) }
+        captionPoll = null
+        captionKind = "ok"
+        captionCaps = false
+        captionAid = false
+    }
+
+    private fun tickCaption() {
+        readCaptionFlags()
+        val raw = if (captionCaps) "caps" else if (captionAid) "aid" else "ok"
+        val now = System.currentTimeMillis()
+        if (captionSince == 0L) {
+            captionSince = now
+            captionRaw = raw
+            captionKind = "ok"
+            return
+        }
+        if (raw != captionRaw) {
+            captionRaw = raw
+            captionSince = now
+            return
+        }
+        if (raw == captionKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - captionSince < need) return
+        captionKind = raw
+        notifyListeners("captionChanged", captionPayload())
     }
 
     @PluginMethod
@@ -626,6 +730,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopCaptionWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

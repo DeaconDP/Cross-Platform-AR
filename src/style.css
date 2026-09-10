@@ -223,6 +223,13 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+.is-ar-caption-caps .ar-hint,
+.is-ar-caption-aid .ar-hint {
+  text-shadow:
+    0 1px 8px rgba(8, 10, 12, 0.75),
+    0 0 1px #000;
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;

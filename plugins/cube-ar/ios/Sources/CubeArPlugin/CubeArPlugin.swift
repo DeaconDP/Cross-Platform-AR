@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "captionState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var captionKind = "ok"
+    private var captionRaw = "ok"
+    private var captionSince: TimeInterval = 0
+    private var captionCaps = false
+    private var captionAid = false
+    private var captionTimer: Timer?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -107,6 +114,69 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startCaptionWatch()
+    }
+
+    @objc func captionState(_ call: CAPPluginCall) {
+        call.resolve(captionPayload())
+    }
+
+    private func captionPayload() -> [String: Any] {
+        [
+            "kind": captionKind,
+            "caps": captionCaps,
+            "aid": captionAid,
+            "valid": true,
+        ]
+    }
+
+    private func readCaptionFlags() {
+        captionCaps = UIAccessibility.isClosedCaptioningEnabled
+        captionAid = !UIAccessibility.hearingDevicePairedEar.isEmpty
+    }
+
+    private func startCaptionWatch() {
+        stopCaptionWatch()
+        captionKind = "ok"
+        captionRaw = "ok"
+        captionSince = 0
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.tickCaption()
+        }
+        timer.tolerance = 0.15
+        RunLoop.main.add(timer, forMode: .common)
+        captionTimer = timer
+        tickCaption()
+    }
+
+    private func stopCaptionWatch() {
+        captionTimer?.invalidate()
+        captionTimer = nil
+        captionKind = "ok"
+        captionCaps = false
+        captionAid = false
+    }
+
+    private func tickCaption() {
+        readCaptionFlags()
+        let raw = captionCaps ? "caps" : (captionAid ? "aid" : "ok")
+        let now = Date().timeIntervalSince1970
+        if captionSince == 0 {
+            captionSince = now
+            captionRaw = raw
+            captionKind = "ok"
+            return
+        }
+        if raw != captionRaw {
+            captionRaw = raw
+            captionSince = now
+            return
+        }
+        if raw == captionKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - captionSince < need { return }
+        captionKind = raw
+        notifyListeners("captionChanged", data: captionPayload())
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +190,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopCaptionWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
