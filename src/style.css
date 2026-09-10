@@ -180,6 +180,7 @@ body.ar-native-active #ar-overlay {
 #ar-overlay {
   position: fixed;
   inset: 0;
+  overscroll-behavior: none;
   pointer-events: none;
   display: flex;
   flex-direction: column;

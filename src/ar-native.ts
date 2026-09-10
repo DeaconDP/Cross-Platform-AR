@@ -8,6 +8,13 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  arEdgeArm,
+  arEdgeBlocksPlace,
+  arEdgeCoach,
+  arEdgeParseNative,
+  type ArEdgeKind,
+} from "./arEdge";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -87,9 +94,43 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  let edgeKind: ArEdgeKind = "ok";
+  let edgeCoach: string | null = null;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+
+  const applyEdge = (kind: ArEdgeKind, coach: string | null) => {
+    edgeKind = kind;
+    edgeCoach = coach;
+    if (coach && placed === 0) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = coach;
+    }
+  };
+
+  const edgeArm = arEdgeArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arEdgeParseNative(await CubeAR.edgeState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: applyEdge,
+  });
+  try {
+    const parsed = arEdgeParseNative(await CubeAR.edgeState());
+    applyEdge(parsed.kind, arEdgeCoach(parsed.kind, "cubes"));
+  } catch {
+    /* plugin without edgeState */
+  }
+  const edgeChanged = await CubeAR.addListener("edgeChanged", (data) => {
+    const parsed = arEdgeParseNative(data);
+    applyEdge(parsed.kind, arEdgeCoach(parsed.kind, "cubes"));
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -116,6 +157,14 @@ export async function startNativeAR(
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
+    const nx = event.clientX / Math.max(window.innerWidth, 1);
+    const ny = event.clientY / Math.max(window.innerHeight, 1);
+    if (arEdgeBlocksPlace(edgeKind, "cubes", nx, ny)) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent =
+        edgeCoach ?? "Tap the table in the middle — the edge swipe leaves.";
+      return;
+    }
     try {
       const result = await CubeAR.onScreenTap({
         x: event.clientX * dpr,
@@ -157,7 +206,9 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    edgeArm.dispose();
     trackingListener.remove();
+    edgeChanged.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();

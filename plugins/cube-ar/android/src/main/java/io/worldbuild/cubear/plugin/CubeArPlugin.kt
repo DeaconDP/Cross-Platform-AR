@@ -9,6 +9,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +68,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var edgePoll: Runnable? = null
+    private var edgeKind = "ok"
+    private var edgeRaw = "ok"
+    private var edgeSince = 0L
+    private var edgeGesture = false
+    private var edgeBack = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -193,6 +200,11 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun edgeState(call: PluginCall) {
+        call.resolve(edgePayload())
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")
@@ -209,6 +221,17 @@ class CubeArPlugin : Plugin() {
                 val result = JSObject()
                 result.put("placed", false)
                 result.put("count", placedCount)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
+
+            val w = view.width.coerceAtLeast(1)
+            val h = view.height.coerceAtLeast(1)
+            if (edgeBlocksTap(x / w, y / h)) {
+                val result = JSObject()
+                result.put("placed", false)
+                result.put("count", placedCount)
+                result.put("edge", true)
                 call.resolve(result)
                 return@executeOnMainThread
             }
@@ -353,6 +376,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        startEdgeWatch()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -625,7 +649,81 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun edgePayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", edgeKind)
+        o.put("edge", edgeGesture)
+        o.put("back", edgeBack)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun readEdgeFlags() {
+        edgeBack = false
+        edgeGesture = try {
+            Settings.Secure.getInt(context.contentResolver, "navigation_mode", 0) == 2
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun startEdgeWatch() {
+        stopEdgeWatch()
+        edgeKind = "ok"
+        edgeRaw = "ok"
+        edgeSince = 0
+        val poll = object : Runnable {
+            override fun run() {
+                tickEdge()
+                if (edgePoll === this) {
+                    mainHandler.postDelayed(this, 800)
+                }
+            }
+        }
+        edgePoll = poll
+        mainHandler.post(poll)
+    }
+
+    private fun stopEdgeWatch() {
+        edgePoll?.let { mainHandler.removeCallbacks(it) }
+        edgePoll = null
+        edgeKind = "ok"
+        edgeGesture = false
+        edgeBack = false
+    }
+
+    private fun tickEdge() {
+        readEdgeFlags()
+        val raw = if (edgeBack) "back" else if (edgeGesture) "edge" else "ok"
+        val now = System.currentTimeMillis()
+        if (edgeSince == 0L) {
+            edgeSince = now
+            edgeRaw = raw
+            edgeKind = "ok"
+            return
+        }
+        if (raw != edgeRaw) {
+            edgeRaw = raw
+            edgeSince = now
+            return
+        }
+        if (raw == edgeKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - edgeSince < need) return
+        edgeKind = raw
+        notifyListeners("edgeChanged", edgePayload())
+    }
+
+    private fun edgeBlocksTap(nx: Float, ny: Float): Boolean {
+        if (edgeKind == "back") return true
+        if (edgeKind == "edge") {
+            return nx < 0.08f || nx > 0.92f || ny > 0.94f
+        }
+        return false
+    }
+
     private fun detachArView() {
+        stopEdgeWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arEdgeArm, arEdgeCoach } from "./arEdge";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -75,6 +76,19 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+
+  const edgeArm = arEdgeArm({
+    product: "cubes",
+    root: overlay.root,
+    onKind: (kind, coach) => {
+      if (coach && placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+      } else if (!coach && placed === 0 && kind === "ok") {
+        overlay.hint.textContent = arEdgeCoach("ok", "cubes") ?? overlay.hint.textContent;
+      }
+    },
+  });
 
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
@@ -157,6 +171,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  edgeArm.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "edgeState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var edgeTimer: Timer?
+    private var edgeKind = "ok"
+    private var edgeRaw = "ok"
+    private var edgeSince: TimeInterval = 0
+    private var edgeGesture = false
+    private var edgeBack = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +51,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startEdgeWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -61,6 +69,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func edgeState(_ call: CAPPluginCall) {
+        call.resolve(edgePayload())
+    }
+
     @objc func onScreenTap(_ call: CAPPluginCall) {
         guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
             call.reject("Missing tap coordinates")
@@ -70,6 +82,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async { [weak self] in
             guard let self = self, let view = self.arView else {
                 call.resolve(["placed": false, "count": self?.placedCount ?? 0])
+                return
+            }
+
+            let w = max(view.bounds.width, 1)
+            let h = max(view.bounds.height, 1)
+            if self.edgeBlocksTap(nx: CGFloat(x) / w, ny: CGFloat(y) / h) {
+                call.resolve(["placed": false, "count": self.placedCount, "edge": true])
                 return
             }
 
@@ -119,7 +138,75 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func edgePayload() -> [String: Any] {
+        [
+            "kind": edgeKind,
+            "edge": edgeGesture,
+            "back": edgeBack,
+            "valid": true,
+        ]
+    }
+
+    private func readEdgeFlags() {
+        edgeBack = false
+        let inset = bridge?.viewController?.view.safeAreaInsets.bottom ?? 0
+        edgeGesture = inset >= 20
+    }
+
+    private func startEdgeWatch() {
+        stopEdgeWatch()
+        edgeKind = "ok"
+        edgeRaw = "ok"
+        edgeSince = 0
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.tickEdge()
+        }
+        timer.tolerance = 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        edgeTimer = timer
+        tickEdge()
+    }
+
+    private func stopEdgeWatch() {
+        edgeTimer?.invalidate()
+        edgeTimer = nil
+        edgeKind = "ok"
+        edgeGesture = false
+        edgeBack = false
+    }
+
+    private func tickEdge() {
+        readEdgeFlags()
+        let raw = edgeBack ? "back" : (edgeGesture ? "edge" : "ok")
+        let now = Date().timeIntervalSince1970
+        if edgeSince == 0 {
+            edgeSince = now
+            edgeRaw = raw
+            edgeKind = "ok"
+            return
+        }
+        if raw != edgeRaw {
+            edgeRaw = raw
+            edgeSince = now
+            return
+        }
+        if raw == edgeKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - edgeSince < need { return }
+        edgeKind = raw
+        notifyListeners("edgeChanged", data: edgePayload())
+    }
+
+    private func edgeBlocksTap(nx: CGFloat, ny: CGFloat) -> Bool {
+        if edgeKind == "back" { return true }
+        if edgeKind == "edge" {
+            return nx < 0.08 || nx > 0.92 || ny > 0.94
+        }
+        return false
+    }
+
     private func detachArView() {
+        stopEdgeWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
