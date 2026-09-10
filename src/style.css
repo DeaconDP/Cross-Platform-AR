@@ -223,6 +223,12 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+.is-ar-kiosk .ar-hint,
+.is-ar-policy .ar-hint {
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;

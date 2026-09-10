@@ -20,12 +20,20 @@ export interface CubeARTrackingEvent {
     state: "initializing" | "ready" | "limited" | "unavailable";
     message?: string;
 }
+export interface CubeARKioskState {
+    kind: string;
+    pinned: boolean;
+    policy: boolean;
+    valid: boolean;
+}
 export interface CubeARPlugin {
     isSupported(): Promise<CubeARSupportResult>;
     startSession(options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+    kioskState(): Promise<CubeARKioskState>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;
+    addListener(eventName: "kioskChanged", listenerFunc: (event: CubeARKioskState) => void): Promise<PluginListenerHandle>;
     removeAllListeners(): Promise<void>;
 }

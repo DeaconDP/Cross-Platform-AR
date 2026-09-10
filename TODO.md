@@ -1,5 +1,6 @@
 # TODO
 
+- [x] AR kiosk / Guided Access steward — `ar-kiosk` + native `kioskState` / `kioskChanged` (2026-09-10)
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)

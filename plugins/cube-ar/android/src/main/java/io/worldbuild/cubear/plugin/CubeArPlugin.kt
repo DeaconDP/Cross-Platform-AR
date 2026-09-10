@@ -1,7 +1,9 @@
 package io.worldbuild.cubear.plugin
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.Context
+import android.os.UserManager
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -67,6 +69,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var kioskPoll: Runnable? = null
+    private var kioskKind = "ok"
+    private var kioskRaw = "ok"
+    private var kioskSince = 0L
+    private var kioskPinned = false
+    private var kioskPolicy = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -193,6 +201,89 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun kioskState(call: PluginCall) {
+        call.resolve(kioskPayload())
+    }
+
+    private fun kioskPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", kioskKind)
+        o.put("pinned", kioskPinned)
+        o.put("policy", kioskPolicy)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun readPinned(): Boolean {
+        return try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                ?: return false
+            val state = am.lockTaskModeState
+            state == ActivityManager.LOCK_TASK_MODE_LOCKED ||
+                state == ActivityManager.LOCK_TASK_MODE_PINNED
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun readPolicy(): Boolean {
+        return try {
+            val um = context.getSystemService(Context.USER_SERVICE) as? UserManager
+            um?.hasUserRestriction(UserManager.DISALLOW_CAMERA) == true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun startKioskWatch() {
+        stopKioskWatch()
+        kioskKind = "ok"
+        kioskRaw = "ok"
+        kioskSince = 0
+        val poll = object : Runnable {
+            override fun run() {
+                tickKiosk()
+                if (kioskPoll != null) {
+                    mainHandler.postDelayed(this, 800)
+                }
+            }
+        }
+        kioskPoll = poll
+        mainHandler.post(poll)
+    }
+
+    private fun stopKioskWatch() {
+        kioskPoll?.let { mainHandler.removeCallbacks(it) }
+        kioskPoll = null
+        kioskKind = "ok"
+        kioskPinned = false
+        kioskPolicy = false
+    }
+
+    private fun tickKiosk() {
+        kioskPinned = readPinned()
+        kioskPolicy = readPolicy()
+        val raw = if (kioskPolicy) "policy" else if (kioskPinned) "pinned" else "ok"
+        val now = System.currentTimeMillis()
+        if (kioskSince == 0L) {
+            kioskSince = now
+            kioskRaw = raw
+            kioskKind = "ok"
+            return
+        }
+        if (raw != kioskRaw) {
+            kioskRaw = raw
+            kioskSince = now
+            return
+        }
+        if (raw == kioskKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - kioskSince < need) return
+        kioskKind = raw
+        notifyListeners("kioskChanged", kioskPayload())
+    }
+
+    @PluginMethod
     fun onScreenTap(call: PluginCall) {
         val x = call.getFloat("x") ?: run {
             call.reject("Missing tap x")
@@ -223,6 +314,7 @@ class CubeArPlugin : Plugin() {
 
     private fun attachArView(onReady: () -> Unit, onFailed: (Exception) -> Unit = {}) {
         detachArView()
+        startKioskWatch()
 
         val activity = activity as? ComponentActivity
             ?: throw IllegalStateException("No activity")
@@ -626,6 +718,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopKioskWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
