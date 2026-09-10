@@ -20,6 +20,18 @@ export interface CubeARTapOptions {
 export interface CubeARTapResult {
   placed: boolean;
   count: number;
+  lift?: boolean;
+}
+
+export interface CubeARLiftState {
+  live?: boolean;
+  paPerSec?: number;
+  mPerSec?: number;
+  sessionMs?: number;
+  kind?: string;
+  blockPlace?: boolean;
+  placed?: boolean;
+  lift?: boolean;
 }
 
 export interface CubeARTrackingEvent {
@@ -32,6 +44,7 @@ export interface CubeARPlugin {
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  liftState(): Promise<CubeARLiftState>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +52,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "liftChanged",
+    listenerFunc: (event: CubeARLiftState) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

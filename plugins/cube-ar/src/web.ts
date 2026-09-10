@@ -1,5 +1,6 @@
 import { WebPlugin } from "@capacitor/core";
 import type {
+  CubeARLiftState,
   CubeARPlugin,
   CubeARSessionOptions,
   CubeARSupportResult,
@@ -22,5 +23,9 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
 
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
+  }
+
+  async liftState(): Promise<CubeARLiftState> {
+    return { live: false, paPerSec: -1, lift: false };
   }
 }

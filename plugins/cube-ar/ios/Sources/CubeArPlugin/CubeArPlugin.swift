@@ -1,5 +1,6 @@
 import ARKit
 import Capacitor
+import CoreMotion
 import SceneKit
 import UIKit
 
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "liftState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,16 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private let liftAltimeter = CMAltimeter()
+    private var liftLive = false
+    private var liftPaPerSec: Double = -1
+    private var liftMPerSec: Double = -1
+    private var liftLastKpa: Double = -1
+    private var liftLastAlt: Double = -1
+    private var liftLastAt: TimeInterval = 0
+    private var liftEmaPa: Double = 0
+    private var liftKind = "ok"
+    private var liftSessionStart: TimeInterval = 0
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -61,9 +73,18 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func liftState(_ call: CAPPluginCall) {
+        call.resolve(self.liftPayload())
+    }
+
     @objc func onScreenTap(_ call: CAPPluginCall) {
         guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
             call.reject("Missing tap coordinates")
+            return
+        }
+
+        if isLiftCabin() {
+            call.resolve(["placed": false, "count": placedCount, "lift": true])
             return
         }
 
@@ -107,6 +128,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startLift()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -119,7 +141,80 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func liftPayload() -> [String: Any] {
+        let sessionMs = liftSessionStart == 0
+            ? -1.0
+            : (ProcessInfo.processInfo.systemUptime - liftSessionStart) * 1000
+        return [
+            "live": liftLive,
+            "paPerSec": liftPaPerSec,
+            "mPerSec": liftMPerSec,
+            "kind": liftKind,
+            "blockPlace": isLiftCabin(),
+            "lift": isLiftCabin(),
+            "placed": placedCount > 0,
+            "sessionMs": sessionMs,
+        ]
+    }
+
+    private func isLiftCabin() -> Bool {
+        guard liftLive, liftSessionStart > 0 else { return false }
+        let sessionMs = (ProcessInfo.processInfo.systemUptime - liftSessionStart) * 1000
+        return sessionMs >= 1200 && (liftPaPerSec >= 10 || liftKind == "lift")
+    }
+
+    private func startLift() {
+        stopLift()
+        liftSessionStart = ProcessInfo.processInfo.systemUptime
+        liftLive = false
+        liftPaPerSec = -1
+        liftMPerSec = -1
+        liftLastKpa = -1
+        liftLastAlt = -1
+        liftKind = "ok"
+        guard CMAltimeter.isRelativeAltitudeAvailable() else { return }
+        liftAltimeter.startRelativeAltitudeUpdates(to: .main) { [weak self] data, _ in
+            guard let self, let data else { return }
+            self.noteLift(
+                kPa: data.pressure.doubleValue,
+                altitude: data.relativeAltitude.doubleValue
+            )
+        }
+    }
+
+    private func noteLift(kPa: Double, altitude: Double) {
+        let now = ProcessInfo.processInfo.systemUptime
+        if liftLastAt > 0 {
+            let dtMs = (now - liftLastAt) * 1000
+            if dtMs >= 40 {
+                let paPerSec = abs(kPa - liftLastKpa) * 1000 * (1000 / dtMs)
+                let mPerSec = abs(altitude - liftLastAlt) * (1000 / dtMs)
+                let rate = max(paPerSec, mPerSec * 12)
+                liftEmaPa = liftLive ? liftEmaPa * 0.7 + rate * 0.3 : rate
+                let first = !liftLive
+                liftLive = true
+                liftPaPerSec = liftEmaPa
+                liftMPerSec = liftEmaPa / 12
+                let next = liftEmaPa >= 10 ? "lift" : liftEmaPa >= 2.4 ? "stairs" : "ok"
+                if first || next != liftKind {
+                    liftKind = next
+                    notifyListeners("liftChanged", data: liftPayload())
+                }
+            }
+        }
+        liftLastKpa = kPa
+        liftLastAlt = altitude
+        liftLastAt = now
+    }
+
+    private func stopLift() {
+        liftAltimeter.stopRelativeAltitudeUpdates()
+        liftLive = false
+        liftSessionStart = 0
+    }
+
     private func detachArView() {
+        stopLift()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
