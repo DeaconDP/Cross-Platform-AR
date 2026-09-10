@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import Capacitor
 import SceneKit
 import UIKit
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "kioskState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,11 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var kioskKind = "ok"
+    private var kioskRaw = "ok"
+    private var kioskSince: TimeInterval = 0
+    private var kioskObservers: [NSObjectProtocol] = []
+    private var kioskTimer: Timer?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -59,6 +66,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func kioskState(_ call: CAPPluginCall) {
+        call.resolve(kioskPayload())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -107,6 +118,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startKioskWatch()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -119,7 +131,74 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func kioskPayload() -> [String: Any] {
+        [
+            "kind": kioskKind,
+            "pinned": UIAccessibility.isGuidedAccessEnabled,
+            "policy": AVCaptureDevice.authorizationStatus(for: .video) == .restricted,
+            "valid": true,
+        ]
+    }
+
+    private func currentKioskRaw() -> String {
+        if AVCaptureDevice.authorizationStatus(for: .video) == .restricted { return "policy" }
+        if UIAccessibility.isGuidedAccessEnabled { return "pinned" }
+        return "ok"
+    }
+
+    private func startKioskWatch() {
+        stopKioskWatch()
+        kioskKind = "ok"
+        kioskRaw = "ok"
+        kioskSince = 0
+        tickKiosk()
+        kioskObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIAccessibility.guidedAccessStatusDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.tickKiosk()
+            }
+        )
+        kioskTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.tickKiosk()
+        }
+    }
+
+    private func stopKioskWatch() {
+        kioskTimer?.invalidate()
+        kioskTimer = nil
+        for obs in kioskObservers {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        kioskObservers.removeAll()
+        kioskKind = "ok"
+    }
+
+    private func tickKiosk() {
+        let raw = currentKioskRaw()
+        let now = Date().timeIntervalSince1970
+        if kioskSince == 0 {
+            kioskSince = now
+            kioskRaw = raw
+            kioskKind = "ok"
+            return
+        }
+        if raw != kioskRaw {
+            kioskRaw = raw
+            kioskSince = now
+            return
+        }
+        if raw == kioskKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - kioskSince < need { return }
+        kioskKind = raw
+        notifyListeners("kioskChanged", data: kioskPayload())
+    }
+
     private func detachArView() {
+        stopKioskWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
