@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arArmSlew } from "./ar-slew";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -90,10 +91,26 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const slew = arArmSlew({
+    product: "cubes",
+    getNative: async () => {
+      try {
+        return await CubeAR.slewState();
+      } catch {
+        return null;
+      }
+    },
+    onChange: (judge) => {
+      if (judge.coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = judge.coach;
+      }
+    },
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    if (event.message && placed === 0 && !slew.snapshot().coach) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
@@ -109,10 +126,19 @@ export async function startNativeAR(
   const sessionEnded = new Promise<void>((resolve) => {
     void CubeAR.addListener("sessionEnded", () => resolve());
   });
+  const slewListener = await CubeAR.addListener("slewChanged", (data) => {
+    slew.pushNative(data);
+  });
 
   const onTap = async (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    const judge = slew.snapshot();
+    if (judge.blockPlace) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = judge.coach;
+      return;
+    }
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
@@ -121,10 +147,16 @@ export async function startNativeAR(
         x: event.clientX * dpr,
         y: event.clientY * dpr,
       });
+      if (result.spin) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = judge.coach || "Hold still. A fast pan will miss the table.";
+        return;
+      }
       if (result.placed) {
         placed = result.count;
+        slew.setPlaced(true);
         overlay.count.textContent = String(placed);
-        overlay.hint.hidden = true;
+        if (!slew.snapshot().coach) overlay.hint.hidden = true;
         debug.logEvent(`cube placed (#${placed})`);
       }
     } catch {
@@ -157,6 +189,8 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    slew.dispose();
+    slewListener.remove();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");

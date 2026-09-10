@@ -9,6 +9,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +68,13 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var slewManager: SensorManager? = null
+    private var slewListener: SensorEventListener? = null
+    private var slewLive = false
+    private var slewRadPerSec = -1f
+    private var slewEma = 0f
+    private var slewKind = "ok"
+    private var slewSessionStartMs = 0L
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -183,6 +191,11 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun slewState(call: PluginCall) {
+        call.resolve(slewPayload())
+    }
+
+    @PluginMethod
     fun stopSession(call: PluginCall) {
         pendingStartCall = null
         bridge.executeOnMainThread {
@@ -204,6 +217,14 @@ class CubeArPlugin : Plugin() {
         }
 
         bridge.executeOnMainThread {
+            if (isSlewSpin()) {
+                val result = JSObject()
+                result.put("placed", false)
+                result.put("count", placedCount)
+                result.put("spin", true)
+                call.resolve(result)
+                return@executeOnMainThread
+            }
             val view = arSceneView
             if (view == null) {
                 val result = JSObject()
@@ -347,6 +368,7 @@ class CubeArPlugin : Plugin() {
                 // Samsung One UI 8 / ARCore 1.54+: hold uncalibrated IMU open so
                 // Session.resume() does not hit "Failed to register sensor to queue 0".
                 startImuWarmup(activity)
+                startSlew()
                 sceneView.postDelayed({
                     if (arSceneView !== sceneView) return@postDelayed
                     try {
@@ -357,6 +379,7 @@ class CubeArPlugin : Plugin() {
                     } catch (ex: Exception) {
                         attachCompleted = false
                         stopImuWarmup()
+                        stopSlew()
                         arLifecycleOwner = null
                         safeDestroySceneView(sceneView)
                         arSceneView = null
@@ -625,11 +648,81 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun slewPayload(): JSObject {
+        val o = JSObject()
+        o.put("live", slewLive)
+        o.put("radPerSec", slewRadPerSec)
+        o.put("kind", slewKind)
+        o.put("blockPlace", isSlewSpin())
+        o.put("spin", isSlewSpin())
+        o.put("placed", placedCount > 0)
+        o.put(
+            "sessionMs",
+            if (slewSessionStartMs == 0L) -1 else SystemClock.elapsedRealtime() - slewSessionStartMs,
+        )
+        return o
+    }
+
+    private fun isSlewSpin(): Boolean {
+        if (!slewLive || slewSessionStartMs == 0L) return false
+        val sessionMs = SystemClock.elapsedRealtime() - slewSessionStartMs
+        return sessionMs >= 800 && (slewRadPerSec >= 2.6f || slewKind == "spin")
+    }
+
+    private fun startSlew() {
+        stopSlew()
+        slewSessionStartMs = SystemClock.elapsedRealtime()
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+        val gyro = sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE) ?: return
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                val v = event?.values ?: return
+                noteSlew(sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]))
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        sm.registerListener(listener, gyro, SensorManager.SENSOR_DELAY_GAME)
+        slewListener = listener
+        slewManager = sm
+    }
+
+    private fun noteSlew(rad: Float) {
+        slewEma = if (slewLive) slewEma * 0.7f + rad * 0.3f else rad
+        val first = !slewLive
+        slewLive = true
+        slewRadPerSec = slewEma
+        val next = if (slewEma >= 2.6f) "spin" else if (slewEma >= 1.35f) "sweep" else "ok"
+        if (first || next != slewKind) {
+            slewKind = next
+            notifyListeners("slewChanged", slewPayload())
+        }
+    }
+
+    private fun stopSlew() {
+        val sm = slewManager
+        val listener = slewListener
+        if (sm != null && listener != null) {
+            try {
+                sm.unregisterListener(listener)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        slewManager = null
+        slewListener = null
+        slewLive = false
+        slewRadPerSec = -1f
+        slewEma = 0f
+        slewKind = "ok"
+        slewSessionStartMs = 0L
+    }
+
     private fun detachArView() {
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
         stopImuWarmup()
+        stopSlew()
         arSceneView?.let { view ->
             safeDestroySceneView(view)
             arSceneView = null
