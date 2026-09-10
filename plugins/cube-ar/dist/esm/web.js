@@ -12,4 +12,10 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async palmState() {
+        return { kind: "ok", fat: false, smear: false, valid: false };
+    }
+    async notePalm() {
+        return { kind: "ok", fat: false, smear: false, valid: false };
+    }
 }

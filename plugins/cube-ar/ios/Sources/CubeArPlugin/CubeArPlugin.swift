@@ -12,6 +12,8 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "palmState", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "notePalm", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var palmKind = "ok"
+    private var palmRaw = "ok"
+    private var palmSince: TimeInterval = 0
+    private var palmFat = false
+    private var palmSmear = false
+    private var palmTimer: Timer?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +52,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startPalmWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -53,8 +62,84 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func palmState(_ call: CAPPluginCall) {
+        call.resolve(palmPayload())
+    }
+
+    @objc func notePalm(_ call: CAPPluginCall) {
+        applyPalmCall(call)
+        call.resolve(palmPayload())
+    }
+
+    private func palmPayload() -> [String: Any] {
+        [
+            "kind": palmKind,
+            "fat": palmFat,
+            "smear": palmSmear,
+            "valid": true,
+        ]
+    }
+
+    private func applyPalmCall(_ call: CAPPluginCall) {
+        let major = CGFloat(call.getFloat("major") ?? 0)
+        let pointers = call.getInt("pointers") ?? 1
+        palmFat = major >= 48
+        palmSmear = pointers >= 3
+        tickPalm(forceRaw: true)
+    }
+
+    private func startPalmWatch() {
+        stopPalmWatch()
+        palmKind = "ok"
+        palmRaw = "ok"
+        palmSince = 0
+        palmFat = false
+        palmSmear = false
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.tickPalm(forceRaw: false)
+        }
+        timer.tolerance = 0.15
+        RunLoop.main.add(timer, forMode: .common)
+        palmTimer = timer
+        tickPalm(forceRaw: false)
+    }
+
+    private func stopPalmWatch() {
+        palmTimer?.invalidate()
+        palmTimer = nil
+        palmKind = "ok"
+        palmFat = false
+        palmSmear = false
+    }
+
+    private func tickPalm(forceRaw: Bool) {
+        let raw = palmSmear ? "smear" : (palmFat ? "fat" : "ok")
+        let now = Date().timeIntervalSince1970
+        if palmSince == 0 {
+            palmSince = now
+            palmRaw = raw
+            palmKind = "ok"
+            return
+        }
+        if forceRaw || raw != palmRaw {
+            palmRaw = raw
+            palmSince = now
+            if forceRaw && raw != "ok" {
+                palmKind = raw
+                notifyListeners("palmChanged", data: palmPayload())
+            }
+            return
+        }
+        if raw == palmKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - palmSince < need { return }
+        palmKind = raw
+        notifyListeners("palmChanged", data: palmPayload())
+    }
+
     @objc func stopSession(_ call: CAPPluginCall) {
         DispatchQueue.main.async { [weak self] in
+            self?.stopPalmWatch()
             self?.detachArView()
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
@@ -66,10 +151,21 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject("Missing tap coordinates")
             return
         }
+        applyPalmCall(call)
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self, let view = self.arView else {
-                call.resolve(["placed": false, "count": self?.placedCount ?? 0])
+                var miss = self?.palmPayload() ?? [:]
+                miss["placed"] = false
+                miss["count"] = self?.placedCount ?? 0
+                call.resolve(miss)
+                return
+            }
+            if self.palmKind == "fat" || self.palmKind == "smear" {
+                var payload = self.palmPayload()
+                payload["placed"] = false
+                payload["count"] = self.placedCount
+                call.resolve(payload)
                 return
             }
 
