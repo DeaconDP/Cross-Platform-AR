@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "dirState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var dirKind = "ok"
+    private var dirRaw = "ok"
+    private var dirSince: TimeInterval = 0
+    private var dirRtl = false
+    private var dirMix = false
+    private var dirTimer: Timer?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -107,6 +114,81 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startDirWatch()
+    }
+
+    @objc func dirState(_ call: CAPPluginCall) {
+        call.resolve(dirPayload())
+    }
+
+    private func dirPayload() -> [String: Any] {
+        [
+            "kind": dirKind,
+            "rtl": dirRtl,
+            "mix": dirMix,
+            "valid": true,
+        ]
+    }
+
+    private func readDirFlags() -> (Bool, Bool) {
+        let appRtl = UIApplication.shared.userInterfaceLayoutDirection == .rightToLeft
+        let locRtl: Bool
+        if #available(iOS 16.0, *) {
+            locRtl = Locale.current.language.characterDirection == .rightToLeft
+        } else {
+            locRtl = Locale.characterDirection(forLanguage: Locale.current.languageCode ?? "en") == .rightToLeft
+        }
+        return (appRtl || locRtl, appRtl != locRtl)
+    }
+
+    private func startDirWatch() {
+        stopDirWatch()
+        dirKind = "ok"
+        dirRaw = "ok"
+        dirSince = 0
+        let flags = readDirFlags()
+        dirRtl = flags.0
+        dirMix = flags.1
+        tickDir(forceRaw: false)
+        dirTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.tickDir(forceRaw: false)
+        }
+    }
+
+    private func stopDirWatch() {
+        dirTimer?.invalidate()
+        dirTimer = nil
+        dirKind = "ok"
+        dirRtl = false
+        dirMix = false
+    }
+
+    private func tickDir(forceRaw: Bool) {
+        let flags = readDirFlags()
+        dirRtl = flags.0
+        dirMix = flags.1
+        let raw = dirMix ? "mix" : (dirRtl ? "rtl" : "ok")
+        let now = Date().timeIntervalSince1970 * 1000
+        if dirSince == 0 {
+            dirSince = now
+            dirRaw = raw
+            dirKind = "ok"
+            return
+        }
+        if forceRaw || raw != dirRaw {
+            dirRaw = raw
+            dirSince = now
+            if forceRaw {
+                dirKind = raw
+                notifyListeners("dirChanged", data: dirPayload())
+            }
+            return
+        }
+        if raw == dirKind { return }
+        let need: TimeInterval = raw == "ok" ? 800 : 400
+        if now - dirSince < need { return }
+        dirKind = raw
+        notifyListeners("dirChanged", data: dirPayload())
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +202,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopDirWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

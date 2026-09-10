@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async dirState() {
+        return { kind: "ok", rtl: false, mix: false, valid: false };
+    }
 }
