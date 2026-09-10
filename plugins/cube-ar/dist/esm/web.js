@@ -12,4 +12,14 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async dimState() {
+        return {
+            kind: "ok",
+            night: false,
+            extraDim: false,
+            reduceWhite: false,
+            brightness: 1,
+            valid: false,
+        };
+    }
 }

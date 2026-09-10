@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arDimArm } from "./ar-dim";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -75,6 +76,13 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const dimArm = arDimArm({
+    product: "cubes",
+    root: overlay.root,
+    onKind: (_kind, coach) => {
+      if (placed === 0 && coach) overlay.hint.textContent = coach;
+    },
+  });
 
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
@@ -157,6 +165,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  dimArm.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

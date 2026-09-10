@@ -7,8 +7,10 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.database.ContentObserver
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +69,14 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var dimObserver: ContentObserver? = null
+    private var dimPoll: Runnable? = null
+    private var dimKind = "ok"
+    private var dimRaw = "ok"
+    private var dimSince = 0L
+    private var dimNight = false
+    private var dimExtra = false
+    private var dimBrightness = 1f
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -180,6 +190,129 @@ class CubeArPlugin : Plugin() {
             depth++
         }
         return parts.joinToString(" ← ")
+    }
+
+    @PluginMethod
+    fun dimState(call: PluginCall) {
+        call.resolve(dimPayload())
+    }
+
+    private fun dimPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", dimKind)
+        o.put("night", dimNight)
+        o.put("extraDim", dimExtra)
+        o.put("reduceWhite", false)
+        o.put("brightness", dimBrightness.toDouble())
+        o.put("valid", true)
+        return o
+    }
+
+    private fun readSecureFlag(key: String): Boolean {
+        return try {
+            Settings.Secure.getInt(context.contentResolver, key, 0) == 1
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun readBrightness(): Float {
+        return try {
+            val raw = Settings.System.getInt(
+                context.contentResolver,
+                Settings.System.SCREEN_BRIGHTNESS,
+                128,
+            )
+            var n = raw / 255f
+            if (n > 1f) n = raw / 1023f
+            n.coerceIn(0f, 1f)
+        } catch (_: Exception) {
+            1f
+        }
+    }
+
+    private fun startDimWatch() {
+        stopDimWatch()
+        dimKind = "ok"
+        dimRaw = "ok"
+        dimSince = 0
+        dimObserver = object : ContentObserver(mainHandler) {
+            override fun onChange(selfChange: Boolean) {
+                tickDim()
+            }
+        }
+        try {
+            val cr = context.contentResolver
+            cr.registerContentObserver(
+                Settings.Secure.getUriFor("night_display_activated"),
+                false,
+                dimObserver!!,
+            )
+            cr.registerContentObserver(
+                Settings.Secure.getUriFor("reduce_bright_colors_activated"),
+                false,
+                dimObserver!!,
+            )
+            cr.registerContentObserver(
+                Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS),
+                false,
+                dimObserver!!,
+            )
+        } catch (_: Exception) {
+            /* settings may be restricted */
+        }
+        dimPoll = object : Runnable {
+            override fun run() {
+                tickDim()
+                dimPoll?.let { mainHandler.postDelayed(it, 800) }
+            }
+        }
+        mainHandler.post(dimPoll!!)
+    }
+
+    private fun stopDimWatch() {
+        dimPoll?.let { mainHandler.removeCallbacks(it) }
+        dimPoll = null
+        dimObserver?.let {
+            try {
+                context.contentResolver.unregisterContentObserver(it)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        dimObserver = null
+        dimKind = "ok"
+        dimNight = false
+        dimExtra = false
+        dimBrightness = 1f
+    }
+
+    private fun tickDim() {
+        dimNight = readSecureFlag("night_display_activated")
+        dimExtra = readSecureFlag("reduce_bright_colors_activated")
+        dimBrightness = readBrightness()
+        val raw = when {
+            dimNight -> "night"
+            dimExtra || dimBrightness < 0.12f -> "dim"
+            else -> "ok"
+        }
+        val now = System.currentTimeMillis()
+        if (dimSince == 0L) {
+            dimSince = now
+            dimRaw = raw
+            dimKind = "ok"
+            return
+        }
+        if (raw != dimRaw) {
+            dimRaw = raw
+            dimSince = now
+            return
+        }
+        if (raw == dimKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - dimSince < need) return
+        dimKind = raw
+        notifyListeners("dimChanged", dimPayload())
     }
 
     @PluginMethod
@@ -353,6 +486,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        startDimWatch()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -626,6 +760,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopDimWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

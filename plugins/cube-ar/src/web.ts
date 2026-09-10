@@ -23,4 +23,15 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
   }
+
+  async dimState() {
+    return {
+      kind: "ok",
+      night: false,
+      extraDim: false,
+      reduceWhite: false,
+      brightness: 1,
+      valid: false,
+    };
+  }
 }

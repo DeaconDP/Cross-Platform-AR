@@ -1,5 +1,6 @@
 # TODO
 
+- [x] AR Extra Dim / Night Light steward — `ar-dim` + native `dimState` / `dimChanged` (2026-09-10)
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)
