@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "diskState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var diskAvail: Int64 = -1
+    private var diskTotal: Int64 = -1
+    private var diskKind = "ok"
+    private var diskTimer: Timer?
+    private static let diskLowBytes: Int64 = 200 * 1024 * 1024
+    private static let diskCriticalBytes: Int64 = 32 * 1024 * 1024
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +51,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startDisk()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -59,6 +67,74 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func diskState(_ call: CAPPluginCall) {
+        noteDisk()
+        call.resolve(diskPayload())
+    }
+
+    private func diskPayload() -> [String: Any] {
+        [
+            "live": diskAvail >= 0,
+            "bytesAvail": diskAvail,
+            "bytesTotal": diskTotal,
+            "kind": diskKind,
+            "skipCache": diskKind == "critical",
+            "placed": placedCount > 0,
+        ]
+    }
+
+    private func startDisk() {
+        stopDisk()
+        noteDisk()
+        diskTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            self?.noteDisk()
+        }
+    }
+
+    private func noteDisk() {
+        var avail: Int64 = -1
+        var total: Int64 = -1
+        if let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
+           let values = try? url.resourceValues(forKeys: [
+            .volumeAvailableCapacityForImportantUsageKey,
+            .volumeAvailableCapacityKey,
+            .volumeTotalCapacityKey
+           ]) {
+            if let important = values.volumeAvailableCapacityForImportantUsage, important > 0 {
+                avail = important
+            } else if let cap = values.volumeAvailableCapacity {
+                avail = Int64(cap)
+            }
+            if let t = values.volumeTotalCapacity {
+                total = Int64(t)
+            }
+        }
+        diskAvail = avail
+        diskTotal = total
+        var next = "ok"
+        if avail >= 0 {
+            if avail < Self.diskCriticalBytes {
+                next = "critical"
+            } else if avail < Self.diskLowBytes || (total > 0 && avail < total / 20) {
+                next = "low"
+            }
+        }
+        if next != diskKind {
+            diskKind = next
+            notifyListeners("diskChanged", data: diskPayload())
+        } else {
+            diskKind = next
+        }
+    }
+
+    private func stopDisk() {
+        diskTimer?.invalidate()
+        diskTimer = nil
+        diskAvail = -1
+        diskTotal = -1
+        diskKind = "ok"
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -120,6 +196,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopDisk()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

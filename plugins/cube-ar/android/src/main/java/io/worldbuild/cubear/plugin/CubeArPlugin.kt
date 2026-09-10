@@ -3,6 +3,7 @@ package io.worldbuild.cubear.plugin
 import android.Manifest
 import android.content.Context
 import android.graphics.Color
+import android.os.StatFs
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -67,6 +68,11 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var diskAvail = -1L
+    private var diskTotal = -1L
+    private var diskKind = "ok"
+    private var diskTick: Runnable? = null
+    private var diskRunning = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -78,6 +84,9 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+        private const val DISK_LOW_BYTES = 200L * 1024L * 1024L
+        private const val DISK_CRITICAL_BYTES = 32L * 1024L * 1024L
+        private const val DISK_POLL_MS = 2000L
     }
 
     @PluginMethod
@@ -148,6 +157,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startDisk()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -190,6 +200,78 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun diskState(call: PluginCall) {
+        noteDisk()
+        call.resolve(diskPayload())
+    }
+
+    private fun diskPayload(): JSObject {
+        val o = JSObject()
+        o.put("live", diskAvail >= 0)
+        o.put("bytesAvail", diskAvail)
+        o.put("bytesTotal", diskTotal)
+        o.put("kind", diskKind)
+        o.put("skipCache", diskKind == "critical")
+        o.put("placed", placedCount > 0)
+        return o
+    }
+
+    private fun startDisk() {
+        stopDisk()
+        diskRunning = true
+        noteDisk()
+        val tick = Runnable { noteDisk() }
+        diskTick = tick
+        mainHandler.postDelayed(tick, DISK_POLL_MS)
+    }
+
+    private fun noteDisk() {
+        var avail = -1L
+        var total = -1L
+        try {
+            val dir = context.cacheDir
+            if (dir != null) {
+                val stat = StatFs(dir.path)
+                avail = stat.availableBytes
+                total = stat.totalBytes
+            }
+        } catch (_: Exception) {
+            /* keep last */
+        }
+        diskAvail = avail
+        diskTotal = total
+        var next = "ok"
+        if (avail >= 0) {
+            next = when {
+                avail < DISK_CRITICAL_BYTES -> "critical"
+                avail < DISK_LOW_BYTES || (total > 0 && avail < total / 20L) -> "low"
+                else -> "ok"
+            }
+        }
+        if (next != diskKind) {
+            diskKind = next
+            notifyListeners("diskChanged", diskPayload())
+        } else {
+            diskKind = next
+        }
+        if (diskRunning) {
+            diskTick?.let { tick ->
+                mainHandler.removeCallbacks(tick)
+                mainHandler.postDelayed(tick, DISK_POLL_MS)
+            }
+        }
+    }
+
+    private fun stopDisk() {
+        diskRunning = false
+        diskTick?.let { mainHandler.removeCallbacks(it) }
+        diskTick = null
+        diskAvail = -1L
+        diskTotal = -1L
+        diskKind = "ok"
     }
 
     @PluginMethod
@@ -629,6 +711,7 @@ class CubeArPlugin : Plugin() {
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
+        stopDisk()
         stopImuWarmup()
         arSceneView?.let { view ->
             safeDestroySceneView(view)

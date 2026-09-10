@@ -6,6 +6,7 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import { arArmDisk } from "./ar-disk";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -75,6 +76,21 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const defaultHint = overlay.hint.textContent;
+  const disk = arArmDisk({
+    product: "cubes",
+    root: overlay.root,
+    useWeb: true,
+    onChange: (judge) => {
+      if (judge.coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = judge.coach;
+      } else if (placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = defaultHint;
+      }
+    },
+  });
 
   session.addEventListener("select", () => {
     if (!reticle.visible) return;
@@ -84,7 +100,8 @@ export async function startWebXR(
     scene.add(cube);
     placed++;
     overlay.count.textContent = String(placed);
-    overlay.hint.hidden = true;
+    disk.setPlaced(true);
+    if (!disk.snapshot().coach) overlay.hint.hidden = true;
     debug.logEvent(`cube placed (#${placed})`);
   });
 
@@ -94,6 +111,7 @@ export async function startWebXR(
   const viewerSpace = await session.requestReferenceSpace("viewer");
   const hitTestSource = await session.requestHitTestSource!({ space: viewerSpace });
   if (!hitTestSource) {
+    disk.dispose();
     unwireDebug();
     unbindSession();
     await session.end();
@@ -157,6 +175,7 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  disk.dispose();
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
