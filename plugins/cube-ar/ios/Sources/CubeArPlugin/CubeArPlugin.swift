@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "flickerState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,14 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var flickerKind = "ok"
+    private var flickerRaw = "ok"
+    private var flickerSince = Date()
+    private var flickerArmed = false
+    private var flickerP2p: Double = 0
+    private var flickerValid = false
+    private var flickerLumas: [Float] = []
+    private var flickerTimer: Timer?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -61,6 +70,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func flickerState(_ call: CAPPluginCall) {
+        call.resolve(flickerPayload())
+    }
+
     @objc func onScreenTap(_ call: CAPPluginCall) {
         guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
             call.reject("Missing tap coordinates")
@@ -68,8 +81,16 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, let view = self.arView else {
-                call.resolve(["placed": false, "count": self?.placedCount ?? 0])
+            guard let self = self else {
+                call.resolve(["placed": false, "count": 0])
+                return
+            }
+            if self.flickerKind == "strobe" {
+                call.resolve(["placed": false, "count": self.placedCount, "strobe": true])
+                return
+            }
+            guard let view = self.arView else {
+                call.resolve(["placed": false, "count": self.placedCount])
                 return
             }
 
@@ -107,6 +128,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startFlickerWatch()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -119,7 +141,80 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func startFlickerWatch() {
+        stopFlickerWatch()
+        flickerKind = "ok"
+        flickerRaw = "ok"
+        flickerSince = Date()
+        flickerArmed = false
+        flickerP2p = 0
+        flickerValid = false
+        flickerLumas = []
+        flickerTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.tickFlicker()
+        }
+    }
+
+    private func stopFlickerWatch() {
+        flickerTimer?.invalidate()
+        flickerTimer = nil
+    }
+
+    private func flickerPayload() -> [String: Any] {
+        ["kind": flickerKind, "p2p": flickerP2p, "valid": flickerValid]
+    }
+
+    private func kindFromFlicker() -> String {
+        if flickerLumas.count < 4 { return "ok" }
+        let minV = flickerLumas.min() ?? 0
+        let maxV = flickerLumas.max() ?? 0
+        let p2p = maxV - minV
+        flickerP2p = Double(p2p)
+        let mean = flickerLumas.reduce(0, +) / Float(flickerLumas.count)
+        let varSum = flickerLumas.reduce(0) { $0 + ($1 - mean) * ($1 - mean) }
+        let cv = mean < 1e-4 ? Float(0) : sqrt(varSum / Float(flickerLumas.count)) / mean
+        var flips = 0
+        var prev: Float = 0
+        for i in 1..<flickerLumas.count {
+            let d = flickerLumas[i] - flickerLumas[i - 1]
+            if prev != 0 && d != 0 && (d > 0) != (prev > 0) { flips += 1 }
+            if d != 0 { prev = d }
+        }
+        if p2p >= 0.18 || (cv >= 0.22 && flips >= 4) { return "strobe" }
+        if p2p >= 0.06 || (cv >= 0.10 && flips >= 3) { return "flicker" }
+        return "ok"
+    }
+
+    private func tickFlicker() {
+        let intensity = arView?.session.currentFrame?.lightEstimate?.ambientIntensity
+        flickerValid = intensity != nil && intensity! > 0
+        if flickerValid, let intensity {
+            let luma = min(1, max(0, intensity / 1000))
+            flickerLumas.append(luma)
+            if flickerLumas.count > 12 { flickerLumas.removeFirst() }
+        }
+        let raw = flickerArmed ? kindFromFlicker() : "ok"
+        let now = Date()
+        if !flickerArmed {
+            flickerArmed = true
+            flickerRaw = raw
+            flickerSince = now
+            return
+        }
+        if raw != flickerRaw {
+            flickerRaw = raw
+            flickerSince = now
+            return
+        }
+        if raw == flickerKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now.timeIntervalSince(flickerSince) < need { return }
+        flickerKind = raw
+        notifyListeners("flickerChanged", data: flickerPayload())
+    }
+
     private func detachArView() {
+        stopFlickerWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

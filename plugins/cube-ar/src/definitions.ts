@@ -20,6 +20,13 @@ export interface CubeARTapOptions {
 export interface CubeARTapResult {
   placed: boolean;
   count: number;
+  strobe?: boolean;
+}
+
+export interface CubeARFlickerState {
+  kind: "ok" | "flicker" | "strobe";
+  p2p: number;
+  valid: boolean;
 }
 
 export interface CubeARTrackingEvent {
@@ -32,6 +39,7 @@ export interface CubeARPlugin {
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  flickerState(): Promise<CubeARFlickerState>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +47,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "flickerChanged",
+    listenerFunc: (event: CubeARFlickerState) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

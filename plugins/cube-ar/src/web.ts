@@ -1,5 +1,6 @@
 import { WebPlugin } from "@capacitor/core";
 import type {
+  CubeARFlickerState,
   CubeARPlugin,
   CubeARSessionOptions,
   CubeARSupportResult,
@@ -22,5 +23,9 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
 
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
+  }
+
+  async flickerState(): Promise<CubeARFlickerState> {
+    return { kind: "ok", p2p: 0, valid: false };
   }
 }

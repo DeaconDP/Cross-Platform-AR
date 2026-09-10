@@ -29,6 +29,7 @@ import com.getcapacitor.Logger
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.HitResult
+import com.google.ar.core.LightEstimate
 import com.google.ar.core.Plane
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
@@ -67,6 +68,16 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var flickerKind = "ok"
+    private var flickerRaw = "ok"
+    private var flickerSince = 0L
+    private var flickerStart = 0L
+    private var flickerLastTick = 0L
+    private var flickerP2p = 0f
+    private var flickerValid = false
+    private val flickerLumas = FloatArray(12)
+    private var flickerCount = 0
+    private var flickerWrite = 0
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -203,6 +214,15 @@ class CubeArPlugin : Plugin() {
             return
         }
 
+        if (flickerKind == "strobe") {
+            val result = JSObject()
+            result.put("placed", false)
+            result.put("count", placedCount)
+            result.put("strobe", true)
+            call.resolve(result)
+            return
+        }
+
         bridge.executeOnMainThread {
             val view = arSceneView
             if (view == null) {
@@ -221,8 +241,105 @@ class CubeArPlugin : Plugin() {
         }
     }
 
+    @PluginMethod
+    fun flickerState(call: PluginCall) {
+        call.resolve(flickerPayload())
+    }
+
+    private fun resetFlicker() {
+        flickerKind = "ok"
+        flickerRaw = "ok"
+        flickerSince = 0L
+        flickerStart = System.currentTimeMillis()
+        flickerLastTick = 0L
+        flickerP2p = 0f
+        flickerValid = false
+        flickerCount = 0
+        flickerWrite = 0
+    }
+
+    private fun flickerPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", flickerKind)
+        o.put("p2p", flickerP2p.toDouble())
+        o.put("valid", flickerValid)
+        return o
+    }
+
+    private fun flickerPeakToPeak(): Float {
+        if (flickerCount < 2) return 0f
+        var min = flickerLumas[0]
+        var max = flickerLumas[0]
+        for (i in 0 until flickerCount) {
+            val v = flickerLumas[i]
+            if (v < min) min = v
+            if (v > max) max = v
+        }
+        return max - min
+    }
+
+    private fun kindFromFlicker(now: Long): String {
+        if (now - flickerStart < 800 || flickerCount < 4) return "ok"
+        val p2p = flickerPeakToPeak()
+        var mean = 0f
+        for (i in 0 until flickerCount) mean += flickerLumas[i]
+        mean /= flickerCount
+        var variance = 0f
+        for (i in 0 until flickerCount) {
+            val d = flickerLumas[i] - mean
+            variance += d * d
+        }
+        val cv = if (mean < 1e-4f) 0f else sqrt(variance / flickerCount) / mean
+        var flips = 0
+        var prev = 0f
+        for (i in 1 until flickerCount) {
+            val d = flickerLumas[i] - flickerLumas[i - 1]
+            if (prev != 0f && d != 0f && kotlin.math.sign(d) != kotlin.math.sign(prev)) flips++
+            if (d != 0f) prev = d
+        }
+        if (p2p >= 0.18f || (cv >= 0.22f && flips >= 4)) return "strobe"
+        if (p2p >= 0.06f || (cv >= 0.10f && flips >= 3)) return "flicker"
+        return "ok"
+    }
+
+    private fun tickFlicker(frame: com.google.ar.core.Frame) {
+        val now = System.currentTimeMillis()
+        if (flickerLastTick != 0L && now - flickerLastTick < 250) return
+        flickerLastTick = now
+        val le = frame.lightEstimate
+        val luma = if (le != null && le.state == LightEstimate.State.VALID) {
+            le.pixelIntensity
+        } else {
+            null
+        }
+        flickerValid = luma != null
+        if (luma != null) {
+            flickerLumas[flickerWrite] = luma.coerceIn(0f, 1f)
+            flickerWrite = (flickerWrite + 1) % flickerLumas.size
+            if (flickerCount < flickerLumas.size) flickerCount++
+        }
+        val raw = kindFromFlicker(now)
+        flickerP2p = flickerPeakToPeak()
+        if (flickerSince == 0L) {
+            flickerSince = now
+            flickerRaw = raw
+            return
+        }
+        if (raw != flickerRaw) {
+            flickerRaw = raw
+            flickerSince = now
+            return
+        }
+        if (raw == flickerKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - flickerSince < need) return
+        flickerKind = raw
+        notifyListeners("flickerChanged", flickerPayload())
+    }
+
     private fun attachArView(onReady: () -> Unit, onFailed: (Exception) -> Unit = {}) {
         detachArView()
+        resetFlicker()
 
         val activity = activity as? ComponentActivity
             ?: throw IllegalStateException("No activity")
@@ -309,6 +426,7 @@ class CubeArPlugin : Plugin() {
                     sessionFrameReceived = true
                     cancelSessionWatchdog()
                 }
+                tickFlicker(frame)
                 val tracking = frame.camera.trackingState
                 updateReticle(sceneView, frame)
                 when (tracking) {
@@ -626,6 +744,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        resetFlicker()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
