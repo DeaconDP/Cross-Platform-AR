@@ -1,5 +1,6 @@
 import ARKit
 import Capacitor
+import Darwin
 import SceneKit
 import UIKit
 
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "memState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,15 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var memAvail: Int64 = -1
+    private var memTotal: Int64 = -1
+    private var memWarned = false
+    private var memKind = "ok"
+    private var memLowFx = false
+    private var memTimer: Timer?
+    private var memObserver: NSObjectProtocol?
+    private static let memTightBytes: Int64 = 80 * 1024 * 1024
+    private static let memCriticalBytes: Int64 = 32 * 1024 * 1024
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +55,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startMem()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -59,6 +71,83 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func memState(_ call: CAPPluginCall) {
+        noteMem()
+        call.resolve(memPayload())
+    }
+
+    private func memPayload() -> [String: Any] {
+        [
+            "live": memAvail >= 0 || memWarned,
+            "bytesAvail": memAvail,
+            "bytesTotal": memTotal,
+            "usedRatio": memTotal > 0 && memAvail >= 0
+                ? 1.0 - (Double(memAvail) / Double(memTotal))
+                : -1,
+            "warned": memWarned,
+            "kind": memKind,
+            "lowFx": memLowFx,
+            "placed": placedCount > 0,
+        ]
+    }
+
+    private func startMem() {
+        stopMem()
+        memObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.memWarned = true
+            self?.noteMem()
+        }
+        noteMem()
+        memTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            self?.noteMem()
+        }
+    }
+
+    private func noteMem() {
+        var avail: Int64 = -1
+        let found = os_proc_available_memory()
+        if found > 0 {
+            avail = Int64(found)
+        }
+        memAvail = avail
+        memTotal = -1
+        var next = "ok"
+        if memWarned || (avail >= 0 && avail < Self.memCriticalBytes) {
+            next = "critical"
+        } else if avail >= 0 && avail < Self.memTightBytes {
+            next = "tight"
+        }
+        let wasLow = memLowFx
+        memLowFx = next != "ok"
+        if memLowFx && !wasLow {
+            arView?.antialiasingMode = .none
+        }
+        if next != memKind {
+            memKind = next
+            notifyListeners("memChanged", data: memPayload())
+        } else {
+            memKind = next
+        }
+    }
+
+    private func stopMem() {
+        memTimer?.invalidate()
+        memTimer = nil
+        if let memObserver {
+            NotificationCenter.default.removeObserver(memObserver)
+        }
+        memObserver = nil
+        memAvail = -1
+        memTotal = -1
+        memWarned = false
+        memKind = "ok"
+        memLowFx = false
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -120,6 +209,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopMem()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
