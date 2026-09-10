@@ -1,5 +1,12 @@
 import { Capacitor } from "@capacitor/core";
 import { CubeAR } from "cube-ar";
+import {
+  arLoupeArm,
+  arLoupeBlocksPlace,
+  arLoupeCoach,
+  arLoupeParseNative,
+  type ArLoupeKind,
+} from "./ar-loupe";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -87,13 +94,24 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  let loupeKind: ArLoupeKind = "ok";
+  let loupeCoach: string | null = null;
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const applyLoupeHint = () => {
+    overlay.root.classList.toggle("is-ar-loupe-zoom", loupeKind === "zoom");
+    overlay.root.classList.toggle("is-ar-loupe-assist", loupeKind === "assist");
+    if (loupeCoach && placed === 0) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = loupeCoach;
+    }
+  };
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    if (event.message && placed === 0 && !loupeCoach) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
@@ -113,6 +131,12 @@ export async function startNativeAR(
   const onTap = async (event: PointerEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
+    if (arLoupeBlocksPlace(loupeKind, "cubes")) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent =
+        loupeCoach ?? "Turn off Magnification so the tap hits the table.";
+      return;
+    }
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
@@ -133,6 +157,35 @@ export async function startNativeAR(
   };
 
   document.addEventListener("pointerdown", onTap);
+
+  const loupeListener = await CubeAR.addListener("loupeChanged", (data) => {
+    loupeKind = arLoupeParseNative(data).kind;
+    loupeCoach = arLoupeCoach(loupeKind, "cubes");
+    applyLoupeHint();
+  });
+  try {
+    loupeKind = arLoupeParseNative(await CubeAR.loupeState()).kind;
+    loupeCoach = arLoupeCoach(loupeKind, "cubes");
+    applyLoupeHint();
+  } catch {
+    /* plugin without loupeState */
+  }
+  const loupeArm = arLoupeArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arLoupeParseNative(await CubeAR.loupeState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      loupeKind = kind;
+      loupeCoach = coach;
+      applyLoupeHint();
+    },
+  });
 
   const onExit = async () => {
     overlay.exit.disabled = true;
@@ -157,6 +210,8 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    loupeArm.dispose();
+    void loupeListener.remove();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");

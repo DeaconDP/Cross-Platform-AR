@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "loupeState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var loupeKind = "ok"
+    private var loupeRaw = "ok"
+    private var loupeSince: TimeInterval = 0
+    private var loupeAssist = false
+    private var loupeZoom = false
+    private var loupeObservers: [NSObjectProtocol] = []
+    private var loupeTimer: Timer?
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -61,6 +69,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func loupeState(_ call: CAPPluginCall) {
+        call.resolve(loupePayload())
+    }
+
     @objc func onScreenTap(_ call: CAPPluginCall) {
         guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
             call.reject("Missing tap coordinates")
@@ -68,6 +80,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         DispatchQueue.main.async { [weak self] in
+            if self?.loupeKind == "zoom" {
+                call.resolve(["placed": false, "zoom": true, "count": self?.placedCount ?? 0])
+                return
+            }
             guard let self = self, let view = self.arView else {
                 call.resolve(["placed": false, "count": self?.placedCount ?? 0])
                 return
@@ -107,6 +123,105 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startLoupeWatch()
+    }
+
+    private func loupePayload() -> [String: Any] {
+        [
+            "kind": loupeKind,
+            "assist": loupeAssist,
+            "zoom": loupeZoom,
+            "valid": true,
+        ]
+    }
+
+    private func currentLoupeRaw() -> String {
+        var assist = UIAccessibility.isSwitchControlRunning
+        if #available(iOS 16.1, *) {
+            assist = assist || UIAccessibility.isAssistiveTouchRunning
+        }
+        if #available(iOS 16.0, *) {
+            assist = assist || UIAccessibility.isVoiceControlRunning
+        }
+        loupeAssist = assist
+        loupeZoom = false
+        if assist { return "assist" }
+        return "ok"
+    }
+
+    private func startLoupeWatch() {
+        stopLoupeWatch()
+        loupeKind = "ok"
+        loupeRaw = "ok"
+        loupeSince = 0
+        tickLoupe()
+        loupeObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIAccessibility.switchControlStatusDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.tickLoupe()
+            }
+        )
+        if #available(iOS 16.1, *) {
+            loupeObservers.append(
+                NotificationCenter.default.addObserver(
+                    forName: UIAccessibility.assistiveTouchStatusDidChangeNotification,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.tickLoupe()
+                }
+            )
+        }
+        if #available(iOS 16.0, *) {
+            loupeObservers.append(
+                NotificationCenter.default.addObserver(
+                    forName: UIAccessibility.voiceControlStatusDidChangeNotification,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.tickLoupe()
+                }
+            )
+        }
+        loupeTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.tickLoupe()
+        }
+    }
+
+    private func stopLoupeWatch() {
+        loupeTimer?.invalidate()
+        loupeTimer = nil
+        for obs in loupeObservers {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        loupeObservers.removeAll()
+        loupeKind = "ok"
+        loupeAssist = false
+        loupeZoom = false
+    }
+
+    private func tickLoupe() {
+        let raw = currentLoupeRaw()
+        let now = Date().timeIntervalSince1970
+        if loupeSince == 0 {
+            loupeSince = now
+            loupeRaw = raw
+            loupeKind = "ok"
+            return
+        }
+        if raw != loupeRaw {
+            loupeRaw = raw
+            loupeSince = now
+            return
+        }
+        if raw == loupeKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - loupeSince < need { return }
+        loupeKind = raw
+        notifyListeners("loupeChanged", data: loupePayload())
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +235,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopLoupeWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
