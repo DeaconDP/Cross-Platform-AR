@@ -9,7 +9,9 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.text.TextUtils
 import android.view.View
+import java.util.Locale
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.widget.FrameLayout
@@ -67,6 +69,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var dirKind = "ok"
+    private var dirRaw = "ok"
+    private var dirSince = 0L
+    private var dirRtl = false
+    private var dirMix = false
+    private var dirPoll: Runnable? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +156,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startDirWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -190,6 +199,88 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun dirState(call: PluginCall) {
+        call.resolve(dirPayload())
+    }
+
+    private fun dirPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", dirKind)
+        o.put("rtl", dirRtl)
+        o.put("mix", dirMix)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun readDirFlags() {
+        var appRtl = false
+        var locRtl = false
+        try {
+            activity?.let {
+                appRtl = it.resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL
+            }
+            locRtl = TextUtils.getLayoutDirectionFromLocale(Locale.getDefault()) == View.LAYOUT_DIRECTION_RTL
+        } catch (_: Exception) {
+            /* keep false */
+        }
+        dirMix = appRtl != locRtl
+        dirRtl = appRtl || locRtl
+    }
+
+    private fun startDirWatch() {
+        stopDirWatch()
+        dirKind = "ok"
+        dirRaw = "ok"
+        dirSince = 0L
+        dirRtl = false
+        dirMix = false
+        val poll = object : Runnable {
+            override fun run() {
+                tickDir(false)
+                if (dirPoll != null) {
+                    mainHandler.postDelayed(this, 800)
+                }
+            }
+        }
+        dirPoll = poll
+        mainHandler.post(poll)
+    }
+
+    private fun stopDirWatch() {
+        dirPoll?.let { mainHandler.removeCallbacks(it) }
+        dirPoll = null
+        dirKind = "ok"
+        dirRtl = false
+        dirMix = false
+    }
+
+    private fun tickDir(forceRaw: Boolean) {
+        readDirFlags()
+        val raw = if (dirMix) "mix" else if (dirRtl) "rtl" else "ok"
+        val now = System.currentTimeMillis()
+        if (dirSince == 0L) {
+            dirSince = now
+            dirRaw = raw
+            dirKind = "ok"
+            return
+        }
+        if (forceRaw || raw != dirRaw) {
+            dirRaw = raw
+            dirSince = now
+            if (forceRaw) {
+                dirKind = raw
+                notifyListeners("dirChanged", dirPayload())
+            }
+            return
+        }
+        if (raw == dirKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - dirSince < need) return
+        dirKind = raw
+        notifyListeners("dirChanged", dirPayload())
     }
 
     @PluginMethod
@@ -626,6 +717,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopDirWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

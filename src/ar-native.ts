@@ -8,6 +8,13 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  arDirArm,
+  arDirApplyClass,
+  arDirCoach,
+  arDirParseNative,
+  type ArDirKind,
+} from "./ar-dir";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -90,10 +97,17 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  let dirKind: ArDirKind = "ok";
+  let dirCoach: string | null = null;
+
+  const applyDirHint = () => {
+    if (placed > 0) return;
+    if (dirCoach) overlay.hint.textContent = dirCoach;
+  };
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    if (event.message && placed === 0 && !dirCoach) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
@@ -132,6 +146,42 @@ export async function startNativeAR(
     }
   };
 
+  const dirListener = await CubeAR.addListener("dirChanged", (data) => {
+    const parsed = arDirParseNative(data);
+    dirKind = parsed.kind;
+    dirCoach = arDirCoach(parsed.kind, "cubes");
+    arDirApplyClass(document.body, dirKind);
+    arDirApplyClass(overlay.root, dirKind);
+    applyDirHint();
+  });
+  try {
+    const parsed = arDirParseNative(await CubeAR.dirState());
+    dirKind = parsed.kind;
+    dirCoach = arDirCoach(parsed.kind, "cubes");
+    arDirApplyClass(document.body, dirKind);
+    arDirApplyClass(overlay.root, dirKind);
+    applyDirHint();
+  } catch {
+    /* plugin without dirState */
+  }
+  const dirArm = arDirArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arDirParseNative(await CubeAR.dirState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      dirKind = kind;
+      dirCoach = coach;
+      arDirApplyClass(document.body, kind);
+      applyDirHint();
+    },
+  });
+
   document.addEventListener("pointerdown", onTap);
 
   const onExit = async () => {
@@ -158,6 +208,10 @@ export async function startNativeAR(
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
+    dirListener.remove();
+    dirArm.dispose();
+    arDirApplyClass(document.body, "ok");
+    arDirApplyClass(overlay.root, "ok");
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();
