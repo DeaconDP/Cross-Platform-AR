@@ -1,5 +1,7 @@
 # TODO
 
+- [x] AR VPN / Private Relay / lockdown steward (`src/ar-vpn.ts`) + native `vpnState` / `vpnChanged`
+- [ ] Physical device QA: VPN / Private Relay still places a cube
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)

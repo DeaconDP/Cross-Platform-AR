@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arVpnArm, arVpnParseNative } from "./ar-vpn";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -93,7 +94,7 @@ export async function startNativeAR(
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    if (event.message && placed === 0 && !overlay.hint.classList.contains("is-ar-vpn-vpn") && !overlay.hint.classList.contains("is-ar-vpn-lock")) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
@@ -132,6 +133,30 @@ export async function startNativeAR(
     }
   };
 
+  const vpnArm = arVpnArm({
+    product: "cubes",
+    root: overlay.hint,
+    getNative: async () => {
+      try {
+        return arVpnParseNative(await CubeAR.vpnState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (_kind, coach) => {
+      if (coach && placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+      }
+    },
+  });
+  const vpnListener = await CubeAR.addListener("vpnChanged", (event) => {
+    const parsed = arVpnParseNative(event);
+    if (parsed.kind !== "ok" && placed === 0) {
+      overlay.hint.hidden = false;
+    }
+  }).catch(() => ({ remove: async () => undefined }));
+
   document.addEventListener("pointerdown", onTap);
 
   const onExit = async () => {
@@ -154,6 +179,8 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    vpnArm.dispose();
+    await vpnListener.remove();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;

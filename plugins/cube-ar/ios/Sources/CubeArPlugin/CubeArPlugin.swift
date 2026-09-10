@@ -1,5 +1,6 @@
 import ARKit
 import Capacitor
+import Network
 import SceneKit
 import UIKit
 
@@ -12,6 +13,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "vpnState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +22,14 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var vpnMonitor: NWPathMonitor?
+    private let vpnQueue = DispatchQueue(label: "io.worldbuild.cube.vpn")
+    private var vpnTimer: Timer?
+    private var vpnKind = "ok"
+    private var vpnRaw = "ok"
+    private var vpnSince: TimeInterval = 0
+    private var vpnFlag = false
+    private var lockFlag = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -107,6 +117,83 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startVpnWatch()
+    }
+
+    @objc func vpnState(_ call: CAPPluginCall) {
+        call.resolve(vpnPayload())
+    }
+
+    private func vpnPayload() -> [String: Any] {
+        [
+            "kind": vpnKind,
+            "vpn": vpnFlag,
+            "lock": lockFlag,
+            "valid": true,
+        ]
+    }
+
+    private func startVpnWatch() {
+        stopVpnWatch()
+        vpnKind = "ok"
+        vpnRaw = "ok"
+        vpnSince = 0
+        vpnFlag = false
+        lockFlag = false
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async {
+                let tunnel = path.usesInterfaceType(.other)
+                let direct =
+                    path.usesInterfaceType(.wifi)
+                    || path.usesInterfaceType(.cellular)
+                    || path.usesInterfaceType(.wiredEthernet)
+                self?.vpnFlag = tunnel
+                self?.lockFlag = tunnel && !direct
+                self?.tickVpn(forceRaw: false)
+            }
+        }
+        monitor.start(queue: vpnQueue)
+        vpnMonitor = monitor
+        tickVpn(forceRaw: false)
+        vpnTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.tickVpn(forceRaw: false)
+        }
+    }
+
+    private func stopVpnWatch() {
+        vpnTimer?.invalidate()
+        vpnTimer = nil
+        vpnMonitor?.cancel()
+        vpnMonitor = nil
+        vpnKind = "ok"
+        vpnFlag = false
+        lockFlag = false
+    }
+
+    private func tickVpn(forceRaw: Bool) {
+        let raw = lockFlag ? "lock" : (vpnFlag ? "vpn" : "ok")
+        let now = Date().timeIntervalSince1970
+        if vpnSince == 0 {
+            vpnSince = now
+            vpnRaw = raw
+            vpnKind = "ok"
+            return
+        }
+        if forceRaw || raw != vpnRaw {
+            vpnRaw = raw
+            vpnSince = now
+            if forceRaw {
+                vpnKind = raw
+                notifyListeners("vpnChanged", data: vpnPayload())
+            }
+            return
+        }
+        if raw == vpnKind { return }
+        let need: TimeInterval = raw == "ok" ? 800 : 400
+        if now - vpnSince < need { return }
+        vpnKind = raw
+        notifyListeners("vpnChanged", data: vpnPayload())
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +207,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopVpnWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

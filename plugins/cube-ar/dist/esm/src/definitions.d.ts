@@ -27,5 +27,17 @@ export interface CubeARPlugin {
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;
+    vpnState(): Promise<{
+        kind: string;
+        vpn: boolean;
+        lock: boolean;
+        valid: boolean;
+    }>;
+    addListener(eventName: "vpnChanged", listenerFunc: (event: {
+        kind?: string;
+        vpn?: boolean;
+        lock?: boolean;
+        valid?: boolean;
+    }) => void): Promise<PluginListenerHandle>;
     removeAllListeners(): Promise<void>;
 }

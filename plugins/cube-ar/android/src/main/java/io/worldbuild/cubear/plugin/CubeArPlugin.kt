@@ -3,6 +3,11 @@ package io.worldbuild.cubear.plugin
 import android.Manifest
 import android.content.Context
 import android.graphics.Color
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.VpnManager
+import android.os.Build
+import android.provider.Settings
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -67,6 +72,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var vpnPoll: Runnable? = null
+    private var vpnKind = "ok"
+    private var vpnRaw = "ok"
+    private var vpnSince = 0L
+    private var vpnFlag = false
+    private var lockFlag = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -353,6 +364,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        startVpnWatch()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -625,7 +637,104 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    @PluginMethod
+    fun vpnState(call: PluginCall) {
+        call.resolve(vpnPayload())
+    }
+
+    private fun vpnPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", vpnKind)
+        o.put("vpn", vpnFlag)
+        o.put("lock", lockFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun readVpnFlags() {
+        var vpn = false
+        var lock = false
+        try {
+            val ctx = context
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (cm != null && Build.VERSION.SDK_INT >= 23) {
+                val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+                if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                    vpn = true
+                }
+            }
+            if (Build.VERSION.SDK_INT >= 31) {
+                val vm = ctx.getSystemService(VpnManager::class.java)
+                if (vm != null && vm.isAlwaysOnVpnLockdownEnabled) {
+                    lock = true
+                    vpn = true
+                }
+            } else if (Settings.Secure.getInt(ctx.contentResolver, "always_on_vpn_lockdown", 0) == 1) {
+                lock = true
+                vpn = true
+            }
+        } catch (_: Exception) {
+            /* keep false */
+        }
+        vpnFlag = vpn
+        lockFlag = lock
+    }
+
+    private fun startVpnWatch() {
+        stopVpnWatch()
+        vpnKind = "ok"
+        vpnRaw = "ok"
+        vpnSince = 0L
+        vpnFlag = false
+        lockFlag = false
+        val poll = object : Runnable {
+            override fun run() {
+                tickVpn(false)
+                if (vpnPoll === this) {
+                    mainHandler.postDelayed(this, 800)
+                }
+            }
+        }
+        vpnPoll = poll
+        mainHandler.post(poll)
+    }
+
+    private fun stopVpnWatch() {
+        vpnPoll?.let { mainHandler.removeCallbacks(it) }
+        vpnPoll = null
+        vpnKind = "ok"
+        vpnFlag = false
+        lockFlag = false
+    }
+
+    private fun tickVpn(forceRaw: Boolean) {
+        readVpnFlags()
+        val raw = if (lockFlag) "lock" else if (vpnFlag) "vpn" else "ok"
+        val now = System.currentTimeMillis()
+        if (vpnSince == 0L) {
+            vpnSince = now
+            vpnRaw = raw
+            vpnKind = "ok"
+            return
+        }
+        if (forceRaw || raw != vpnRaw) {
+            vpnRaw = raw
+            vpnSince = now
+            if (forceRaw) {
+                vpnKind = raw
+                notifyListeners("vpnChanged", vpnPayload())
+            }
+            return
+        }
+        if (raw == vpnKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - vpnSince < need) return
+        vpnKind = raw
+        notifyListeners("vpnChanged", vpnPayload())
+    }
+
     private fun detachArView() {
+        stopVpnWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
