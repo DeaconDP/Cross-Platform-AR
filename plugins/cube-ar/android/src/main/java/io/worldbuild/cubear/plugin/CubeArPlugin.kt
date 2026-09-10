@@ -7,6 +7,9 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.View
@@ -67,6 +70,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var savePoll: Runnable? = null
+    private var saveKind = "ok"
+    private var saveRaw = "ok"
+    private var saveSince = 0L
+    private var saveFlag = false
+    private var meterFlag = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -221,6 +230,99 @@ class CubeArPlugin : Plugin() {
         }
     }
 
+    @PluginMethod
+    fun saveState(call: PluginCall) {
+        call.resolve(savePayload())
+    }
+
+    private fun savePayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", saveKind)
+        o.put("save", saveFlag)
+        o.put("meter", meterFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun readSaveFlags() {
+        var save = false
+        var meter = false
+        try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (cm != null) {
+                if (Build.VERSION.SDK_INT >= 24) {
+                    val status = cm.restrictBackgroundStatus
+                    save = status == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED ||
+                        status == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_WHITELISTED
+                }
+                meter = cm.isActiveNetworkMetered
+                if (Build.VERSION.SDK_INT >= 23) {
+                    val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+                    if (caps != null && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) {
+                        meter = true
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            /* keep false */
+        }
+        saveFlag = save
+        meterFlag = meter
+    }
+
+    private fun startSaveWatch() {
+        stopSaveWatch()
+        saveKind = "ok"
+        saveRaw = "ok"
+        saveSince = 0L
+        saveFlag = false
+        meterFlag = false
+        val poll = object : Runnable {
+            override fun run() {
+                tickSave(false)
+                if (savePoll != null) {
+                    mainHandler.postDelayed(this, 800)
+                }
+            }
+        }
+        savePoll = poll
+        mainHandler.post(poll)
+    }
+
+    private fun stopSaveWatch() {
+        savePoll?.let { mainHandler.removeCallbacks(it) }
+        savePoll = null
+        saveKind = "ok"
+        saveFlag = false
+        meterFlag = false
+    }
+
+    private fun tickSave(forceRaw: Boolean) {
+        readSaveFlags()
+        val raw = if (saveFlag) "save" else if (meterFlag) "meter" else "ok"
+        val now = System.currentTimeMillis()
+        if (saveSince == 0L) {
+            saveSince = now
+            saveRaw = raw
+            saveKind = "ok"
+            return
+        }
+        if (forceRaw || raw != saveRaw) {
+            saveRaw = raw
+            saveSince = now
+            if (forceRaw) {
+                saveKind = raw
+                notifyListeners("saveChanged", savePayload())
+            }
+            return
+        }
+        if (raw == saveKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - saveSince < need) return
+        saveKind = raw
+        notifyListeners("saveChanged", savePayload())
+    }
+
     private fun attachArView(onReady: () -> Unit, onFailed: (Exception) -> Unit = {}) {
         detachArView()
 
@@ -353,6 +455,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        startSaveWatch()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -626,6 +729,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopSaveWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
