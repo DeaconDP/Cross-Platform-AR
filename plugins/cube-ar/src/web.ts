@@ -5,6 +5,7 @@ import type {
   CubeARSupportResult,
   CubeARTapOptions,
   CubeARTapResult,
+  CubeARWbState,
 } from "./definitions";
 
 export class CubeARWeb extends WebPlugin implements CubeARPlugin {
@@ -22,5 +23,9 @@ export class CubeARWeb extends WebPlugin implements CubeARPlugin {
 
   async onScreenTap(_options: CubeARTapOptions): Promise<CubeARTapResult> {
     return { placed: false, count: 0 };
+  }
+
+  async wbState(): Promise<CubeARWbState> {
+    return { kind: "ok", cct: 0, valid: false };
   }
 }

@@ -29,6 +29,7 @@ import com.getcapacitor.Logger
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.HitResult
+import com.google.ar.core.LightEstimate
 import com.google.ar.core.Plane
 import com.google.ar.core.TrackingState
 import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException
@@ -67,6 +68,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var wbKind = "ok"
+    private var wbRaw = "ok"
+    private var wbSince = 0L
+    private var wbCct = 0.0
+    private var wbValid = false
+    private var wbLastTick = 0L
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -180,6 +187,15 @@ class CubeArPlugin : Plugin() {
             depth++
         }
         return parts.joinToString(" ← ")
+    }
+
+    @PluginMethod
+    fun wbState(call: PluginCall) {
+        val result = JSObject()
+        result.put("kind", wbKind)
+        result.put("cct", wbCct)
+        result.put("valid", wbValid)
+        call.resolve(result)
     }
 
     @PluginMethod
@@ -309,6 +325,7 @@ class CubeArPlugin : Plugin() {
                     sessionFrameReceived = true
                     cancelSessionWatchdog()
                 }
+                tickWb(frame)
                 val tracking = frame.camera.trackingState
                 updateReticle(sceneView, frame)
                 when (tracking) {
@@ -625,7 +642,77 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun resetWb() {
+        wbKind = "ok"
+        wbRaw = "ok"
+        wbSince = 0L
+        wbCct = 0.0
+        wbValid = false
+        wbLastTick = 0L
+    }
+
+    private fun tickWb(frame: com.google.ar.core.Frame) {
+        val now = System.currentTimeMillis()
+        if (wbLastTick != 0L && now - wbLastTick < 400) return
+        wbLastTick = now
+        var cct: Double? = null
+        val le = frame.lightEstimate
+        if (le != null && le.state == LightEstimate.State.VALID) {
+            val cc = FloatArray(4)
+            le.getColorCorrection(cc, 0)
+            cct = cctFromCorrection(cc)
+        }
+        wbValid = cct != null
+        wbCct = cct ?: 0.0
+        val raw = kindFromCct(cct)
+        if (wbSince == 0L) {
+            wbSince = now
+            wbRaw = raw
+            return
+        }
+        if (raw != wbRaw) {
+            wbRaw = raw
+            wbSince = now
+            return
+        }
+        if (raw == wbKind) return
+        val need = if (raw == "ok") 800 else 400
+        if (now - wbSince < need) return
+        wbKind = raw
+        val payload = JSObject()
+        payload.put("kind", wbKind)
+        payload.put("cct", wbCct)
+        payload.put("valid", wbValid)
+        notifyListeners("wbChanged", payload)
+    }
+
+    private fun cctFromCorrection(cc: FloatArray): Double? {
+        if (cc.size < 3) return null
+        val r = cc[0]
+        val g = cc[1]
+        val b = cc[2]
+        val X = 0.4124564f * r + 0.3575761f * g + 0.1804375f * b
+        val Y = 0.2126729f * r + 0.7151522f * g + 0.072175f * b
+        val Z = 0.0193339f * r + 0.119192f * g + 0.9503041f * b
+        val s = X + Y + Z
+        if (s < 1e-6f) return null
+        val x = X / s
+        val y = Y / s
+        val n = (x - 0.332f) / (0.1858f - y)
+        val cct = 449.0 * n * n * n + 3525.0 * n * n + 6823.3 * n + 5520.33
+        if (cct.isNaN() || cct < 1000 || cct > 20000) return null
+        return cct
+    }
+
+    private fun kindFromCct(cct: Double?): String {
+        if (cct == null) return "ok"
+        if (cct < 3400) return "warm"
+        if (cct > 7000) return "cold"
+        return "ok"
+    }
+
     private fun detachArView() {
+        resetWb()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arWbApplyClass, arWbCoach, arWbParseNative } from "./ar-wb";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -91,6 +92,26 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const applyWb = (kind: ReturnType<typeof arWbParseNative>["kind"]) => {
+    arWbApplyClass(document.body, kind);
+    if (placed === 0) {
+      const coach = arWbCoach(kind, "cubes");
+      if (coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+      }
+    }
+  };
+
+  const wbListener = await CubeAR.addListener("wbChanged", (event) => {
+    applyWb(arWbParseNative(event).kind);
+  });
+  try {
+    applyWb(arWbParseNative(await CubeAR.wbState()).kind);
+  } catch {
+    /* plugin without wb yet */
+  }
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
@@ -158,7 +179,9 @@ export async function startNativeAR(
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
+    wbListener.remove();
     await CubeAR.removeAllListeners();
+    arWbApplyClass(document.body, "ok");
     document.body.classList.remove("ar-native-active");
     unwireDebug();
     resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

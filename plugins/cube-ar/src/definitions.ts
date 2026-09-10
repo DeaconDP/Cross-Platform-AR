@@ -27,11 +27,20 @@ export interface CubeARTrackingEvent {
   message?: string;
 }
 
+export type CubeARWbKind = "ok" | "warm" | "cold";
+
+export interface CubeARWbState {
+  kind: CubeARWbKind;
+  cct: number;
+  valid: boolean;
+}
+
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  wbState(): Promise<CubeARWbState>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +48,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "wbChanged",
+    listenerFunc: (event: CubeARWbState) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }
