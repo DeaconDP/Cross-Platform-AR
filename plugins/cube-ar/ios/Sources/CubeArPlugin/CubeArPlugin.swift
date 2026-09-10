@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "freezeState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var freezeTimer: Timer?
+    private var freezeSessionStart: TimeInterval = 0
+    private var lastFrameTs: TimeInterval = -1
+    private var lastUniqueAt: TimeInterval = 0
+    private var freezeStuck = false
+    private var lastFreezeKind = ""
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +51,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startFreezeWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -61,6 +69,12 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func freezeState(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            call.resolve(self?.freezePayload() ?? [:])
+        }
+    }
+
     @objc func onScreenTap(_ call: CAPPluginCall) {
         guard let x = call.getFloat("x"), let y = call.getFloat("y") else {
             call.reject("Missing tap coordinates")
@@ -70,6 +84,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.main.async { [weak self] in
             guard let self = self, let view = self.arView else {
                 call.resolve(["placed": false, "count": self?.placedCount ?? 0])
+                return
+            }
+            if self.isFrozen() {
+                call.resolve(["placed": false, "frozen": true, "count": self.placedCount])
                 return
             }
 
@@ -119,7 +137,72 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func startFreezeWatch() {
+        freezeSessionStart = ProcessInfo.processInfo.systemUptime
+        lastFrameTs = -1
+        lastUniqueAt = freezeSessionStart
+        freezeStuck = false
+        lastFreezeKind = ""
+        freezeTimer?.invalidate()
+        freezeTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.noteFreeze()
+        }
+    }
+
+    private func stopFreezeWatch() {
+        freezeTimer?.invalidate()
+        freezeTimer = nil
+        lastFreezeKind = ""
+        freezeStuck = false
+    }
+
+    private func noteFreeze() {
+        guard arView != nil else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if let ts = arView?.session.currentFrame?.timestamp {
+            if ts != lastFrameTs {
+                lastFrameTs = ts
+                lastUniqueAt = now
+                freezeStuck = false
+            } else if now - lastUniqueAt >= 1.2 {
+                freezeStuck = true
+            }
+        }
+        let payload = freezePayload()
+        let kind = payload["kind"] as? String ?? "ok"
+        if kind != lastFreezeKind {
+            lastFreezeKind = kind
+            notifyListeners("freezeChanged", data: payload)
+        }
+    }
+
+    private func isFrozen() -> Bool {
+        (freezePayload()["kind"] as? String) == "frozen"
+    }
+
+    private func freezePayload() -> [String: Any] {
+        let now = ProcessInfo.processInfo.systemUptime
+        let live = arView != nil
+        let age = lastFrameTs < 0 ? (now - freezeSessionStart) : (now - lastUniqueAt)
+        let session = live ? (now - freezeSessionStart) : 0
+        var kind = "ok"
+        if live && session >= 2 {
+            if freezeStuck || age >= 1.2 { kind = "frozen" }
+            else if age >= 0.4 { kind = "stale" }
+        }
+        return [
+            "live": live,
+            "ageMs": live ? age * 1000 : -1,
+            "sessionMs": live ? session * 1000 : -1,
+            "stuck": freezeStuck && live,
+            "kind": kind,
+            "blockPlace": kind == "frozen",
+            "placed": placedCount > 0,
+        ]
+    }
+
     private func detachArView() {
+        stopFreezeWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

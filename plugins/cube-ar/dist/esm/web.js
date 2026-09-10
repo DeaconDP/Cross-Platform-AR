@@ -12,4 +12,15 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async freezeState() {
+        return {
+            live: false,
+            ageMs: -1,
+            sessionMs: -1,
+            stuck: false,
+            kind: "ok",
+            blockPlace: false,
+            placed: false,
+        };
+    }
 }
