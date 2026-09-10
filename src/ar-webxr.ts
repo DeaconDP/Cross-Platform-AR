@@ -6,6 +6,11 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
+import {
+  arArmLift,
+  arLiftPaPerSecFromHpa,
+  arParseLiftMotion,
+} from "./ar-lift";
 
 export async function isWebXRSupported(): Promise<boolean> {
   if (!navigator.xr) return false;
@@ -75,8 +80,69 @@ export async function startWebXR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const sessionStart = performance.now();
+  let lastHpa = -1;
+  let lastHpaAt = 0;
+  let liftPa = -1;
+  let liftLive = false;
+  const Barometer = (
+    window as unknown as {
+      Barometer?: new (opts: { frequency: number }) => {
+        start: () => void;
+        stop: () => void;
+        pressure: number;
+        addEventListener: (name: string, cb: () => void) => void;
+      };
+    }
+  ).Barometer;
+  let baro: InstanceType<NonNullable<typeof Barometer>> | null = null;
+  if (Barometer) {
+    try {
+      baro = new Barometer({ frequency: 8 });
+      baro.addEventListener("reading", () => {
+        const now = performance.now();
+        const hpa = baro?.pressure ?? -1;
+        if (lastHpa > 0) {
+          const rate = arLiftPaPerSecFromHpa(lastHpa, hpa, now - lastHpaAt);
+          if (rate >= 0) {
+            liftLive = true;
+            liftPa = rate;
+          }
+        }
+        lastHpa = hpa;
+        lastHpaAt = now;
+      });
+      baro.start();
+    } catch {
+      baro = null;
+    }
+  }
+  const lift = arArmLift({
+    product: "cubes",
+    useWeb: true,
+    getWebSample: () =>
+      arParseLiftMotion({
+        live: liftLive,
+        paPerSec: liftPa,
+        sessionMs: performance.now() - sessionStart,
+        placed: placed > 0,
+      }),
+    onChange: (judge) => {
+      if (placed === 0 && judge.coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = judge.coach;
+      }
+    },
+  });
 
   session.addEventListener("select", () => {
+    const lifting = lift.snapshot();
+    if (lifting.blockPlace) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent =
+        lifting.coach || "Wait until the lift stops. Then find the table.";
+      return;
+    }
     if (!reticle.visible) return;
     const cube = createCube();
     reticle.matrix.decompose(cube.position, cube.quaternion, cube.scale);
@@ -85,6 +151,7 @@ export async function startWebXR(
     placed++;
     overlay.count.textContent = String(placed);
     overlay.hint.hidden = true;
+    lift.setPlaced(true);
     debug.logEvent(`cube placed (#${placed})`);
   });
 
@@ -157,6 +224,12 @@ export async function startWebXR(
   });
 
   overlay.exit.removeEventListener("click", onExit);
+  lift.dispose();
+  try {
+    baro?.stop();
+  } catch {
+    /* already stopped */
+  }
   unwireDebug();
   unbindSession();
   resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);

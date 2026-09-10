@@ -8,6 +8,11 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  arArmLift,
+  arLiftPaPerSecFromHpa,
+  arParseLiftMotion,
+} from "./ar-lift";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -90,6 +95,25 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const lift = arArmLift({
+    product: "cubes",
+    getNative: async () => {
+      try {
+        return await CubeAR.liftState();
+      } catch {
+        return null;
+      }
+    },
+    onChange: (judge) => {
+      if (placed === 0 && judge.coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = judge.coach;
+      }
+    },
+  });
+  const liftListener = await CubeAR.addListener("liftChanged", (data) => {
+    lift.pushNative(data);
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -116,6 +140,13 @@ export async function startNativeAR(
 
     // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
     const dpr = window.devicePixelRatio || 1;
+    const lifting = lift.snapshot();
+    if (lifting.blockPlace) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent =
+        lifting.coach || "Wait until the lift stops. Then find the table.";
+      return;
+    }
     try {
       const result = await CubeAR.onScreenTap({
         x: event.clientX * dpr,
@@ -125,7 +156,13 @@ export async function startNativeAR(
         placed = result.count;
         overlay.count.textContent = String(placed);
         overlay.hint.hidden = true;
+        lift.setPlaced(true);
         debug.logEvent(`cube placed (#${placed})`);
+      } else if (result.lift) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent =
+          lift.snapshot().coach ||
+          "Wait until the lift stops. Then find the table.";
       }
     } catch {
       debug.logEvent("tap failed");
@@ -157,6 +194,8 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    lift.dispose();
+    await liftListener.remove();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");

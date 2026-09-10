@@ -9,6 +9,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +68,16 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var liftManager: SensorManager? = null
+    private var liftListener: SensorEventListener? = null
+    private var liftLive = false
+    private var liftPaPerSec = -1f
+    private var liftMPerSec = -1f
+    private var liftLastHpa = -1f
+    private var liftLastNs = 0L
+    private var liftEmaPa = 0f
+    private var liftKind = "ok"
+    private var liftSessionStartMs = 0L
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -200,6 +211,15 @@ class CubeArPlugin : Plugin() {
         }
         val y = call.getFloat("y") ?: run {
             call.reject("Missing tap y")
+            return
+        }
+
+        if (isLiftCabin()) {
+            val result = JSObject()
+            result.put("placed", false)
+            result.put("count", placedCount)
+            result.put("lift", true)
+            call.resolve(result)
             return
         }
 
@@ -347,6 +367,7 @@ class CubeArPlugin : Plugin() {
                 // Samsung One UI 8 / ARCore 1.54+: hold uncalibrated IMU open so
                 // Session.resume() does not hit "Failed to register sensor to queue 0".
                 startImuWarmup(activity)
+                startLift(activity)
                 sceneView.postDelayed({
                     if (arSceneView !== sceneView) return@postDelayed
                     try {
@@ -458,6 +479,93 @@ class CubeArPlugin : Plugin() {
         if (registered == 0) return
         sensorManager = sm
         imuWarmupListener = listener
+    }
+
+    @PluginMethod
+    fun liftState(call: PluginCall) {
+        call.resolve(liftPayload())
+    }
+
+    private fun liftPayload(): JSObject {
+        val o = JSObject()
+        o.put("live", liftLive)
+        o.put("paPerSec", liftPaPerSec)
+        o.put("mPerSec", liftMPerSec)
+        o.put("kind", liftKind)
+        o.put("blockPlace", isLiftCabin())
+        o.put("lift", isLiftCabin())
+        o.put("placed", placedCount > 0)
+        o.put(
+            "sessionMs",
+            if (liftSessionStartMs == 0L) -1 else SystemClock.elapsedRealtime() - liftSessionStartMs,
+        )
+        return o
+    }
+
+    private fun isLiftCabin(): Boolean {
+        if (!liftLive || liftSessionStartMs == 0L) return false
+        val sessionMs = SystemClock.elapsedRealtime() - liftSessionStartMs
+        return sessionMs >= 1200 && (liftPaPerSec >= 10f || liftKind == "lift")
+    }
+
+    private fun startLift(context: Context) {
+        stopLift()
+        liftSessionStartMs = SystemClock.elapsedRealtime()
+        liftLive = false
+        liftPaPerSec = -1f
+        liftMPerSec = -1f
+        liftLastHpa = -1f
+        liftKind = "ok"
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+        val baro = sm.getDefaultSensor(Sensor.TYPE_PRESSURE) ?: return
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                val values = event?.values ?: return
+                noteLift(values[0], event.timestamp)
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        sm.registerListener(listener, baro, SensorManager.SENSOR_DELAY_UI)
+        liftListener = listener
+        liftManager = sm
+    }
+
+    private fun noteLift(hpa: Float, timestampNs: Long) {
+        if (liftLastHpa > 0 && liftLastNs > 0) {
+            val dtMs = (timestampNs - liftLastNs) / 1_000_000f
+            if (dtMs >= 40f) {
+                val paPerSec = kotlin.math.abs(hpa - liftLastHpa) * 100f * (1000f / dtMs)
+                liftEmaPa = if (liftLive) liftEmaPa * 0.7f + paPerSec * 0.3f else paPerSec
+                val first = !liftLive
+                liftLive = true
+                liftPaPerSec = liftEmaPa
+                liftMPerSec = liftEmaPa / 12f
+                val next = if (liftEmaPa >= 10f) "lift" else if (liftEmaPa >= 2.4f) "stairs" else "ok"
+                if (first || next != liftKind) {
+                    liftKind = next
+                    notifyListeners("liftChanged", liftPayload())
+                }
+                liftLastHpa = hpa
+                liftLastNs = timestampNs
+                return
+            }
+        }
+        liftLastHpa = hpa
+        liftLastNs = timestampNs
+    }
+
+    private fun stopLift() {
+        val listener = liftListener ?: return
+        try {
+            liftManager?.unregisterListener(listener)
+        } catch (_: Exception) {
+            // already unregistered
+        }
+        liftListener = null
+        liftManager = null
+        liftLive = false
+        liftSessionStartMs = 0L
     }
 
     private fun stopImuWarmup() {
@@ -630,6 +738,7 @@ class CubeArPlugin : Plugin() {
         sessionFrameReceived = false
         attachCompleted = false
         stopImuWarmup()
+        stopLift()
         arSceneView?.let { view ->
             safeDestroySceneView(view)
             arSceneView = null
