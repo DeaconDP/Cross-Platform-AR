@@ -223,6 +223,11 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+body.is-ar-veil-cover .ar-hint,
+body.is-ar-veil-peek .ar-hint {
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.85);
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;
