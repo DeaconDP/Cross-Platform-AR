@@ -32,6 +32,12 @@ export interface CubeARPlugin {
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  turnState(): Promise<{
+    kind: string;
+    flipOn: boolean;
+    lockOn: boolean;
+    valid: boolean;
+  }>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +45,15 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "turnChanged",
+    listenerFunc: (event: {
+      kind?: string;
+      flipOn?: boolean;
+      lockOn?: boolean;
+      valid?: boolean;
+    }) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

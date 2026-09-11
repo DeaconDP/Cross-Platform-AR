@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "turnState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,111 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var turnTimer: Timer?
+    private var turnObservers: [NSObjectProtocol] = []
+    private var turnKind = "ok"
+    private var turnRaw = "ok"
+    private var turnSince: TimeInterval = 0
+    private var flipFlag = false
+    private var lockFlag = false
+
+    @objc func turnState(_ call: CAPPluginCall) {
+        call.resolve(turnPayload())
+    }
+
+    private func turnPayload() -> [String: Any] {
+        [
+            "kind": turnKind,
+            "flipOn": flipFlag,
+            "lockOn": lockFlag,
+            "valid": true,
+        ]
+    }
+
+    private func startTurnWatch() {
+        stopTurnWatch()
+        turnKind = "ok"
+        turnRaw = "ok"
+        turnSince = 0
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        readTurnFlags()
+        tickTurn(forceRaw: false)
+        let names: [NSNotification.Name] = [
+            UIDevice.orientationDidChangeNotification,
+            UIApplication.didChangeStatusBarOrientationNotification,
+        ]
+        for name in names {
+            turnObservers.append(
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    self?.readTurnFlags()
+                    self?.tickTurn(forceRaw: false)
+                }
+            )
+        }
+        turnTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.readTurnFlags()
+            self?.tickTurn(forceRaw: false)
+        }
+    }
+
+    private func stopTurnWatch() {
+        turnTimer?.invalidate()
+        turnTimer = nil
+        for observer in turnObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        turnObservers.removeAll()
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
+        turnKind = "ok"
+        flipFlag = false
+        lockFlag = false
+    }
+
+    private func readTurnFlags() {
+        flipFlag = false
+        lockFlag = false
+        let device = UIDevice.current.orientation
+        var interfaceLandscape = false
+        if let scene = self.bridge?.webView?.window?.windowScene {
+            interfaceLandscape = scene.interfaceOrientation.isLandscape
+        } else {
+            interfaceLandscape = UIApplication.shared.statusBarOrientation.isLandscape
+        }
+        switch device {
+        case .landscapeLeft, .landscapeRight:
+            flipFlag = !interfaceLandscape
+        case .portrait, .portraitUpsideDown:
+            flipFlag = interfaceLandscape
+        default:
+            flipFlag = false
+        }
+        lockFlag = flipFlag
+    }
+
+    private func tickTurn(forceRaw: Bool) {
+        let raw = flipFlag ? "flip" : (lockFlag ? "lock" : "ok")
+        let now = Date().timeIntervalSince1970
+        if turnSince == 0 {
+            turnSince = now
+            turnRaw = raw
+            turnKind = "ok"
+            return
+        }
+        if forceRaw || raw != turnRaw {
+            turnRaw = raw
+            turnSince = now
+            if forceRaw {
+                turnKind = raw
+                notifyListeners("turnChanged", data: turnPayload())
+            }
+            return
+        }
+        if raw == turnKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - turnSince < need { return }
+        turnKind = raw
+        notifyListeners("turnChanged", data: turnPayload())
+    }
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +150,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startTurnWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -120,6 +227,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopTurnWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
