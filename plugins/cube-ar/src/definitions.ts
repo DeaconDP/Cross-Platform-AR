@@ -27,11 +27,19 @@ export interface CubeARTrackingEvent {
   message?: string;
 }
 
+export interface CubeARRangeState {
+  kind: string;
+  hdrOn: boolean;
+  peakOn: boolean;
+  valid: boolean;
+}
+
 export interface CubeARPlugin {
   isSupported(): Promise<CubeARSupportResult>;
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  rangeState(): Promise<CubeARRangeState>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +47,10 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "rangeChanged",
+    listenerFunc: (event: CubeARRangeState) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

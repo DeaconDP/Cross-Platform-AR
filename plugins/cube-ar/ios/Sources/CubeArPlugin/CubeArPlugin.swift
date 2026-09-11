@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "rangeState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,89 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var rangeTimer: Timer?
+    private var rangeKind = "ok"
+    private var rangeRaw = "ok"
+    private var rangeSince: TimeInterval = 0
+    private var hdrFlag = false
+    private var peakFlag = false
+
+    @objc func rangeState(_ call: CAPPluginCall) {
+        call.resolve(rangePayload())
+    }
+
+    private func rangePayload() -> [String: Any] {
+        [
+            "kind": rangeKind,
+            "hdrOn": hdrFlag,
+            "peakOn": peakFlag,
+            "valid": true,
+        ]
+    }
+
+    private func startRangeWatch() {
+        stopRangeWatch()
+        rangeKind = "ok"
+        rangeRaw = "ok"
+        rangeSince = 0
+        hdrFlag = false
+        peakFlag = false
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.onRangeTick()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        rangeTimer = timer
+        readRangeFlags()
+        tickRange(forceRaw: false)
+    }
+
+    private func stopRangeWatch() {
+        rangeTimer?.invalidate()
+        rangeTimer = nil
+        rangeKind = "ok"
+        hdrFlag = false
+        peakFlag = false
+    }
+
+    private func onRangeTick() {
+        readRangeFlags()
+        tickRange(forceRaw: false)
+    }
+
+    private func readRangeFlags() {
+        hdrFlag = false
+        peakFlag = false
+        let screen = UIScreen.main
+        peakFlag = screen.brightness >= 0.92
+        if #available(iOS 16.0, *) {
+            hdrFlag = screen.currentEDRHeadroom > 1.05
+        }
+    }
+
+    private func tickRange(forceRaw: Bool) {
+        let raw = hdrFlag ? "hdr" : (peakFlag ? "peak" : "ok")
+        let now = Date().timeIntervalSince1970
+        if rangeSince == 0 {
+            rangeSince = now
+            rangeRaw = raw
+            rangeKind = "ok"
+            return
+        }
+        if forceRaw || raw != rangeRaw {
+            rangeRaw = raw
+            rangeSince = now
+            if forceRaw {
+                rangeKind = raw
+                notifyListeners("rangeChanged", data: rangePayload())
+            }
+            return
+        }
+        if raw == rangeKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - rangeSince < need { return }
+        rangeKind = raw
+        notifyListeners("rangeChanged", data: rangePayload())
+    }
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +128,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startRangeWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -120,6 +205,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopRangeWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
