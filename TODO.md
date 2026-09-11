@@ -1,5 +1,11 @@
 # TODO
 
+## Now — AR Doze / App Standby steward (2026-09-10)
+
+- [x] Shared `ar-doze` restrict > optimize > ok + native `dozeState` / `dozeChanged`
+- [x] Native path coaches while the session is open; never blocks place
+- [ ] Physical device QA: Restrict battery usage + App Standby + iOS BAR restricted
+
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)

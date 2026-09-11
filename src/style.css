@@ -223,6 +223,11 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+body.is-ar-doze-restrict .ar-hint,
+body.is-ar-doze-optimize .ar-hint {
+  max-width: 24rem;
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;
