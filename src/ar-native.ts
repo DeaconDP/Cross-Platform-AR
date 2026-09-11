@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arHzArm, arHzParseNative } from "./ar-hz";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -90,6 +91,31 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const defaultHint = "Move your phone to find a surface";
+  const applyHz = (kind: "ok" | "soft" | "slow") => {
+    overlay.root.classList.toggle("is-ar-hz-slow", kind === "slow");
+    overlay.root.classList.toggle("is-ar-hz-soft", kind === "soft");
+  };
+  try {
+    applyHz(arHzParseNative(await CubeAR.hzState()).kind);
+  } catch {
+    /* plugin without hzState */
+  }
+  const hzArm = arHzArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arHzParseNative(await CubeAR.hzState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      applyHz(kind);
+      if (placed === 0) overlay.hint.textContent = coach ?? defaultHint;
+    },
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -154,6 +180,8 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    hzArm.dispose();
+    overlay.root.classList.remove("is-ar-hz-slow", "is-ar-hz-soft");
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;

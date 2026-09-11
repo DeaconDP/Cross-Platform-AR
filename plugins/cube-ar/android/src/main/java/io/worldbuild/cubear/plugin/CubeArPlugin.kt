@@ -9,6 +9,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.view.Display
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +68,14 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var hzKind = "ok"
+    private var hzRaw = "ok"
+    private var hzSince = 0L
+    private var slowFlag = false
+    private var softFlag = false
+    private var hzValue = 0f
+    private var hzWatchOn = false
+    private val hzTick = Runnable { onHzTick() }
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +157,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startHzWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -180,6 +190,94 @@ class CubeArPlugin : Plugin() {
             depth++
         }
         return parts.joinToString(" ← ")
+    }
+
+    @PluginMethod
+    fun hzState(call: PluginCall) {
+        call.resolve(hzPayload())
+    }
+
+    private fun hzPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", hzKind)
+        o.put("slowOn", slowFlag)
+        o.put("softOn", softFlag)
+        o.put("hz", hzValue.toDouble())
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startHzWatch() {
+        stopHzWatch()
+        hzKind = "ok"
+        hzRaw = "ok"
+        hzSince = 0L
+        slowFlag = false
+        softFlag = false
+        hzValue = 0f
+        hzWatchOn = true
+        readHzFlags()
+        tickHz(false)
+        mainHandler.postDelayed(hzTick, 800)
+    }
+
+    private fun stopHzWatch() {
+        hzWatchOn = false
+        mainHandler.removeCallbacks(hzTick)
+        hzKind = "ok"
+        slowFlag = false
+        softFlag = false
+        hzValue = 0f
+    }
+
+    private fun onHzTick() {
+        if (!hzWatchOn) return
+        readHzFlags()
+        tickHz(false)
+        mainHandler.postDelayed(hzTick, 800)
+    }
+
+    private fun readHzFlags() {
+        slowFlag = false
+        softFlag = false
+        hzValue = 0f
+        try {
+            val display: Display? = activity?.windowManager?.defaultDisplay
+            val hz = display?.refreshRate ?: 0f
+            hzValue = hz
+            if (hz > 0f && hz <= 35f) {
+                slowFlag = true
+            } else if (hz > 0f && hz <= 50f) {
+                softFlag = true
+            }
+        } catch (_: Exception) {
+            /* display optional */
+        }
+    }
+
+    private fun tickHz(forceRaw: Boolean) {
+        val raw = if (slowFlag) "slow" else if (softFlag) "soft" else "ok"
+        val now = System.currentTimeMillis()
+        if (hzSince == 0L) {
+            hzSince = now
+            hzRaw = raw
+            hzKind = "ok"
+            return
+        }
+        if (forceRaw || raw != hzRaw) {
+            hzRaw = raw
+            hzSince = now
+            if (forceRaw) {
+                hzKind = raw
+                notifyListeners("hzChanged", hzPayload())
+            }
+            return
+        }
+        if (raw == hzKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - hzSince < need) return
+        hzKind = raw
+        notifyListeners("hzChanged", hzPayload())
     }
 
     @PluginMethod
@@ -626,6 +724,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopHzWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

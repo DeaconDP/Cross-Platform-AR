@@ -1,5 +1,10 @@
 # TODO
 
+## Now — Display refresh-rate steward (2026-09-11)
+
+- [x] Shared `ar-hz` / native `hzState` + `hzChanged` (30 Hz / battery-saver vs 48 Hz cap)
+- [ ] Physical device QA: 30 Hz / 60 Hz still places a cube
+
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)

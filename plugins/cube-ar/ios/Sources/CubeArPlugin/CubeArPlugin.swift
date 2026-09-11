@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "hzState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,101 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var hzLink: CADisplayLink?
+    private var hzKind = "ok"
+    private var hzRaw = "ok"
+    private var hzSince: TimeInterval = 0
+    private var slowFlag = false
+    private var softFlag = false
+    private var hzValue: Float = 0
+
+    @objc func hzState(_ call: CAPPluginCall) {
+        call.resolve(hzPayload())
+    }
+
+    private func hzPayload() -> [String: Any] {
+        [
+            "kind": hzKind,
+            "slowOn": slowFlag,
+            "softOn": softFlag,
+            "hz": hzValue,
+            "valid": true,
+        ]
+    }
+
+    private func startHzWatch() {
+        stopHzWatch()
+        hzKind = "ok"
+        hzRaw = "ok"
+        hzSince = 0
+        slowFlag = false
+        softFlag = false
+        hzValue = 0
+        let link = CADisplayLink(target: self, selector: #selector(onHzFrame(_:)))
+        link.add(to: .main, forMode: .common)
+        hzLink = link
+        readHzFlags()
+        tickHz(forceRaw: false)
+    }
+
+    private func stopHzWatch() {
+        hzLink?.invalidate()
+        hzLink = nil
+        hzKind = "ok"
+        slowFlag = false
+        softFlag = false
+        hzValue = 0
+    }
+
+    @objc private func onHzFrame(_ link: CADisplayLink) {
+        let duration = link.targetTimestamp - link.timestamp
+        if duration > 0 {
+            let instant = Float(1.0 / duration)
+            hzValue = hzValue > 0 ? hzValue * 0.8 + instant * 0.2 : instant
+        }
+        readHzFlags()
+        tickHz(forceRaw: false)
+    }
+
+    private func readHzFlags() {
+        slowFlag = false
+        softFlag = false
+        var hz = hzValue
+        if hz <= 0 {
+            hz = Float(UIScreen.main.maximumFramesPerSecond)
+            hzValue = hz
+        }
+        if hz > 0 && hz <= 35 {
+            slowFlag = true
+        } else if hz > 0 && hz <= 50 {
+            softFlag = true
+        }
+    }
+
+    private func tickHz(forceRaw: Bool) {
+        let raw = slowFlag ? "slow" : (softFlag ? "soft" : "ok")
+        let now = Date().timeIntervalSince1970
+        if hzSince == 0 {
+            hzSince = now
+            hzRaw = raw
+            hzKind = "ok"
+            return
+        }
+        if forceRaw || raw != hzRaw {
+            hzRaw = raw
+            hzSince = now
+            if forceRaw {
+                hzKind = raw
+                notifyListeners("hzChanged", data: hzPayload())
+            }
+            return
+        }
+        if raw == hzKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - hzSince < need { return }
+        hzKind = raw
+        notifyListeners("hzChanged", data: hzPayload())
+    }
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +140,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startHzWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -120,6 +217,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopHzWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
