@@ -223,6 +223,12 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+#ar-overlay.is-ar-form-host .ar-hint,
+#ar-overlay.is-ar-form-site .ar-hint {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;

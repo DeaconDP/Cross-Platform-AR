@@ -2,7 +2,9 @@ package io.worldbuild.cubear.plugin
 
 import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Color
+import android.os.Build
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -67,6 +69,13 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var formKind = "ok"
+    private var formRaw = "ok"
+    private var formSince = 0L
+    private var hostFlag = false
+    private var siteFlag = false
+    private var formWatchOn = false
+    private val formTick = Runnable { onFormTick() }
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +157,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startFormWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -180,6 +190,115 @@ class CubeArPlugin : Plugin() {
             depth++
         }
         return parts.joinToString(" ← ")
+    }
+
+    @PluginMethod
+    fun formState(call: PluginCall) {
+        call.resolve(formPayload())
+    }
+
+    private fun formPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", formKind)
+        o.put("hostOn", hostFlag)
+        o.put("siteOn", siteFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startFormWatch() {
+        stopFormWatch()
+        formKind = "ok"
+        formRaw = "ok"
+        formSince = 0L
+        hostFlag = false
+        siteFlag = false
+        formWatchOn = true
+        readFormFlags()
+        tickForm(false)
+        mainHandler.postDelayed(formTick, 800)
+    }
+
+    private fun stopFormWatch() {
+        formWatchOn = false
+        mainHandler.removeCallbacks(formTick)
+        formKind = "ok"
+        hostFlag = false
+        siteFlag = false
+    }
+
+    private fun onFormTick() {
+        if (!formWatchOn) return
+        readFormFlags()
+        tickForm(false)
+        mainHandler.postDelayed(formTick, 800)
+    }
+
+    private fun formDesktopUa(ua: String?): Boolean {
+        if (ua == null) return false
+        val u = ua.lowercase()
+        val desk = u.contains("macintosh") || u.contains("windows nt")
+            || u.contains("x11") || u.contains("cros")
+        val mobile = u.contains("mobile") || u.contains("android") || u.contains("iphone")
+        return desk && !mobile
+    }
+
+    private fun readFormFlags() {
+        hostFlag = false
+        siteFlag = false
+        try {
+            val pm = context.packageManager
+            val pc = pm.hasSystemFeature(PackageManager.FEATURE_PC)
+            val chrome = pm.hasSystemFeature("org.chromium.arc")
+                || pm.hasSystemFeature("org.chromium.arc.device_management")
+                || Build.BRAND.equals("chrome", ignoreCase = true)
+                || (Build.DEVICE?.contains("cheets") == true)
+            val phone = pm.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
+                && pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)
+            if ((pc || chrome) && !phone) {
+                hostFlag = true
+            }
+            var ua = ""
+            try {
+                ua = bridge.webView.settings.userAgentString ?: ""
+            } catch (_: Exception) {
+                /* ua optional */
+            }
+            if (formDesktopUa(ua)) {
+                if (phone) {
+                    siteFlag = true
+                } else if (!hostFlag) {
+                    hostFlag = true
+                }
+            }
+        } catch (_: Exception) {
+            /* form optional */
+        }
+    }
+
+    private fun tickForm(forceRaw: Boolean) {
+        val raw = if (hostFlag) "host" else if (siteFlag) "site" else "ok"
+        val now = System.currentTimeMillis()
+        if (formSince == 0L) {
+            formSince = now
+            formRaw = raw
+            formKind = "ok"
+            return
+        }
+        if (forceRaw || raw != formRaw) {
+            formRaw = raw
+            formSince = now
+            if (forceRaw) {
+                formKind = raw
+                notifyListeners("formChanged", formPayload())
+            }
+            return
+        }
+        if (raw == formKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - formSince < need) return
+        formKind = raw
+        notifyListeners("formChanged", formPayload())
     }
 
     @PluginMethod
@@ -626,6 +745,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopFormWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

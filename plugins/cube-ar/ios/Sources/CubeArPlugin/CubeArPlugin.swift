@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "formState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,105 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var formTimer: Timer?
+    private var formKind = "ok"
+    private var formRaw = "ok"
+    private var formSince: TimeInterval = 0
+    private var hostFlag = false
+    private var siteFlag = false
+
+    @objc func formState(_ call: CAPPluginCall) {
+        call.resolve(formPayload())
+    }
+
+    private func formPayload() -> [String: Any] {
+        [
+            "kind": formKind,
+            "hostOn": hostFlag,
+            "siteOn": siteFlag,
+            "valid": true
+        ]
+    }
+
+    private func startFormWatch() {
+        stopFormWatch()
+        formKind = "ok"
+        formRaw = "ok"
+        formSince = 0
+        hostFlag = false
+        siteFlag = false
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.onFormTick()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        formTimer = timer
+        readFormFlags()
+        tickForm(forceRaw: false)
+    }
+
+    private func stopFormWatch() {
+        formTimer?.invalidate()
+        formTimer = nil
+        formKind = "ok"
+        hostFlag = false
+        siteFlag = false
+    }
+
+    private func onFormTick() {
+        readFormFlags()
+        tickForm(forceRaw: false)
+    }
+
+    private func formDesktopUa(_ ua: String) -> Bool {
+        let u = ua.lowercased()
+        let desk = u.contains("macintosh") || u.contains("windows nt")
+            || u.contains("x11") || u.contains("cros")
+        let mobile = u.contains("mobile") || u.contains("android") || u.contains("iphone")
+        return desk && !mobile
+    }
+
+    private func readFormFlags() {
+        hostFlag = false
+        siteFlag = false
+        if #available(iOS 14.0, *) {
+            if ProcessInfo.processInfo.isiOSAppOnMac {
+                hostFlag = true
+            }
+        }
+        let ua = bridge?.webView?.customUserAgent ?? ""
+        if formDesktopUa(ua) {
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                siteFlag = true
+            } else if !hostFlag {
+                hostFlag = true
+            }
+        }
+    }
+
+    private func tickForm(forceRaw: Bool) {
+        let raw = hostFlag ? "host" : (siteFlag ? "site" : "ok")
+        let now = Date().timeIntervalSince1970
+        if formSince == 0 {
+            formSince = now
+            formRaw = raw
+            formKind = "ok"
+            return
+        }
+        if forceRaw || raw != formRaw {
+            formRaw = raw
+            formSince = now
+            if forceRaw {
+                formKind = raw
+                notifyListeners("formChanged", data: formPayload())
+            }
+            return
+        }
+        if raw == formKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - formSince < need { return }
+        formKind = raw
+        notifyListeners("formChanged", data: formPayload())
+    }
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +144,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startFormWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -120,6 +221,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopFormWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
