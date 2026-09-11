@@ -2,6 +2,7 @@ package io.worldbuild.cubear.plugin
 
 import android.Manifest
 import android.content.Context
+import android.database.ContentObserver
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -9,6 +10,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +69,15 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var tintKind = "ok"
+    private var tintRaw = "ok"
+    private var tintSince = 0L
+    private var filterFlag = false
+    private var diffFlag = false
+    private var tintWatchOn = false
+    private var tintObserver: ContentObserver? = null
+    private val tintHandler = Handler(Looper.getMainLooper())
+    private val tintTick = Runnable { onTintTick() }
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +159,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startTintWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -190,6 +202,120 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun tintState(call: PluginCall) {
+        call.resolve(tintPayload())
+    }
+
+    private fun tintPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", tintKind)
+        o.put("filter", filterFlag)
+        o.put("diff", diffFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startTintWatch() {
+        stopTintWatch()
+        tintKind = "ok"
+        tintRaw = "ok"
+        tintSince = 0
+        filterFlag = false
+        diffFlag = false
+        tintObserver = object : ContentObserver(tintHandler) {
+            override fun onChange(selfChange: Boolean) {
+                readTintFlags()
+                tickTint(false)
+            }
+        }
+        try {
+            context.contentResolver.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.ACCESSIBILITY_DISPLAY_DALTONIZER_ENABLED),
+                false,
+                tintObserver!!,
+            )
+            context.contentResolver.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.ACCESSIBILITY_DISPLAY_DALTONIZER),
+                false,
+                tintObserver!!,
+            )
+        } catch (_: Exception) {
+            /* settings observer optional */
+        }
+        tintWatchOn = true
+        readTintFlags()
+        tickTint(false)
+        tintHandler.postDelayed(tintTick, 800)
+    }
+
+    private fun stopTintWatch() {
+        tintWatchOn = false
+        tintHandler.removeCallbacks(tintTick)
+        tintObserver?.let {
+            try {
+                context.contentResolver.unregisterContentObserver(it)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        tintObserver = null
+        tintKind = "ok"
+        filterFlag = false
+        diffFlag = false
+    }
+
+    private fun onTintTick() {
+        if (!tintWatchOn) return
+        readTintFlags()
+        tickTint(false)
+        tintHandler.postDelayed(tintTick, 800)
+    }
+
+    private fun readTintFlags() {
+        diffFlag = false
+        try {
+            val enabled = Settings.Secure.getInt(
+                context.contentResolver,
+                Settings.Secure.ACCESSIBILITY_DISPLAY_DALTONIZER_ENABLED,
+                0,
+            )
+            val mode = Settings.Secure.getInt(
+                context.contentResolver,
+                Settings.Secure.ACCESSIBILITY_DISPLAY_DALTONIZER,
+                -1,
+            )
+            filterFlag = enabled == 1 && mode > 0
+        } catch (_: Exception) {
+            filterFlag = false
+        }
+    }
+
+    private fun tickTint(forceRaw: Boolean) {
+        val raw = if (filterFlag) "filter" else if (diffFlag) "diff" else "ok"
+        val now = System.currentTimeMillis()
+        if (tintSince == 0L) {
+            tintSince = now
+            tintRaw = raw
+            tintKind = "ok"
+            return
+        }
+        if (forceRaw || raw != tintRaw) {
+            tintRaw = raw
+            tintSince = now
+            if (forceRaw) {
+                tintKind = raw
+                notifyListeners("tintChanged", tintPayload())
+            }
+            return
+        }
+        if (raw == tintKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - tintSince < need) return
+        tintKind = raw
+        notifyListeners("tintChanged", tintPayload())
     }
 
     @PluginMethod
@@ -626,6 +752,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopTintWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "tintState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var tintTimer: Timer?
+    private var tintObserver: NSObjectProtocol?
+    private var tintKind = "ok"
+    private var tintRaw = "ok"
+    private var tintSince: TimeInterval = 0
+    private var filterFlag = false
+    private var diffFlag = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +52,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startTintWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -59,6 +68,82 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func tintState(_ call: CAPPluginCall) {
+        call.resolve(tintPayload())
+    }
+
+    private func tintPayload() -> [String: Any] {
+        [
+            "kind": tintKind,
+            "filter": filterFlag,
+            "diff": diffFlag,
+            "valid": true
+        ]
+    }
+
+    private func startTintWatch() {
+        stopTintWatch()
+        tintKind = "ok"
+        tintRaw = "ok"
+        tintSince = 0
+        readTintFlags()
+        tickTint(forceRaw: false)
+        tintObserver = NotificationCenter.default.addObserver(
+            forName: UIAccessibility.differentiateWithoutColorDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.readTintFlags()
+            self?.tickTint(forceRaw: false)
+        }
+        tintTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.readTintFlags()
+            self?.tickTint(forceRaw: false)
+        }
+    }
+
+    private func stopTintWatch() {
+        tintTimer?.invalidate()
+        tintTimer = nil
+        if let tintObserver {
+            NotificationCenter.default.removeObserver(tintObserver)
+        }
+        tintObserver = nil
+        tintKind = "ok"
+        filterFlag = false
+        diffFlag = false
+    }
+
+    private func readTintFlags() {
+        filterFlag = false
+        diffFlag = UIAccessibility.shouldDifferentiateWithoutColor
+    }
+
+    private func tickTint(forceRaw: Bool) {
+        let raw = filterFlag ? "filter" : (diffFlag ? "diff" : "ok")
+        let now = Date().timeIntervalSince1970
+        if tintSince == 0 {
+            tintSince = now
+            tintRaw = raw
+            tintKind = "ok"
+            return
+        }
+        if forceRaw || raw != tintRaw {
+            tintRaw = raw
+            tintSince = now
+            if forceRaw {
+                tintKind = raw
+                notifyListeners("tintChanged", data: tintPayload())
+            }
+            return
+        }
+        if raw == tintKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - tintSince < need { return }
+        tintKind = raw
+        notifyListeners("tintChanged", data: tintPayload())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -120,6 +205,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopTintWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

@@ -8,6 +8,11 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  arTintArm,
+  arTintCoach,
+  arTintParseNative,
+} from "./ar-tint";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -91,9 +96,53 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  const applyTint = (kind: Parameters<typeof arTintCoach>[0]) => {
+    const coach = arTintCoach(kind, "cubes");
+    if (coach) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = coach;
+    }
+  };
+
+  const tintListener = await CubeAR.addListener("tintChanged", (event) => {
+    applyTint(arTintParseNative(event).kind);
+  });
+  try {
+    applyTint(arTintParseNative(await CubeAR.tintState()).kind);
+  } catch {
+    /* plugin without tintState */
+  }
+
+  const tintArm = arTintArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arTintParseNative(await CubeAR.tintState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      if (coach) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+      } else if (placed === 0) {
+        overlay.hint.hidden = false;
+      } else if (kind === "ok") {
+        overlay.hint.hidden = placed > 0;
+      }
+    },
+  });
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
+    if (
+      event.message &&
+      placed === 0 &&
+      !overlay.root.classList.contains("is-ar-tint-filter") &&
+      !overlay.root.classList.contains("is-ar-tint-diff")
+    ) {
       overlay.hint.textContent = event.message;
     }
     if (debug.isEnabled()) {
@@ -157,6 +206,8 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    tintArm.dispose();
+    tintListener.remove();
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
