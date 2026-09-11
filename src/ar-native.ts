@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arFormArm, arFormCoach, arFormParseNative } from "./ar-form";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -87,9 +88,42 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  const defaultHint = "Move your phone to find a surface";
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
-  overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.hint.textContent = defaultHint;
+  const applyFormClass = (kind: "ok" | "site" | "host") => {
+    overlay.root.classList.toggle("is-ar-form-host", kind === "host");
+    overlay.root.classList.toggle("is-ar-form-site", kind === "site");
+  };
+  const formArm = arFormArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arFormParseNative(await CubeAR.formState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      applyFormClass(kind);
+      if (placed === 0) overlay.hint.textContent = coach ?? defaultHint;
+    },
+  });
+  let formHandle: { remove: () => Promise<void> } | null = null;
+  try {
+    formHandle = await CubeAR.addListener("formChanged", (data) => {
+      const parsed = arFormParseNative(data);
+      applyFormClass(parsed.kind);
+      if (placed === 0) {
+        overlay.hint.textContent =
+          arFormCoach(parsed.kind, "cubes") ?? defaultHint;
+      }
+    });
+  } catch {
+    /* plugin without formState */
+  }
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -154,6 +188,9 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    formArm.dispose();
+    void formHandle?.remove();
+    overlay.root.classList.remove("is-ar-form-host", "is-ar-form-site");
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
