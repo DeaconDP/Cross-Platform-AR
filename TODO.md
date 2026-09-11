@@ -1,5 +1,7 @@
 # TODO
 
+- [x] Shared `arRange` / native `rangeState` + `rangeChanged` (HDR vs full-bright)
+- [ ] Physical device QA: HDR / full-bright still places a cube
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)

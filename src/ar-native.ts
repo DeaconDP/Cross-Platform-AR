@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arRangeArm, arRangeCoach, arRangeParseNative } from "./ar-range";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -87,9 +88,42 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  const defaultHint = "Move your phone to find a surface";
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
-  overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.hint.textContent = defaultHint;
+  const applyRangeClass = (kind: "ok" | "peak" | "hdr") => {
+    overlay.root.classList.toggle("is-ar-range-hdr", kind === "hdr");
+    overlay.root.classList.toggle("is-ar-range-peak", kind === "peak");
+  };
+  const rangeArm = arRangeArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arRangeParseNative(await CubeAR.rangeState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      applyRangeClass(kind);
+      if (placed === 0) overlay.hint.textContent = coach ?? defaultHint;
+    },
+  });
+  let rangeHandle: { remove: () => Promise<void> } | null = null;
+  try {
+    rangeHandle = await CubeAR.addListener("rangeChanged", (data) => {
+      const parsed = arRangeParseNative(data);
+      applyRangeClass(parsed.kind);
+      if (placed === 0) {
+        overlay.hint.textContent =
+          arRangeCoach(parsed.kind, "cubes") ?? defaultHint;
+      }
+    });
+  } catch {
+    /* plugin without rangeState */
+  }
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -157,6 +191,9 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    rangeArm.dispose();
+    void rangeHandle?.remove();
+    overlay.root.classList.remove("is-ar-range-hdr", "is-ar-range-peak");
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");

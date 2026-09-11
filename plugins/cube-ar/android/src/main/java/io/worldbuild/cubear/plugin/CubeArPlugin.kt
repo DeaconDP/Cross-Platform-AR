@@ -7,8 +7,10 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +69,13 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private val rangeTick = Runnable { onRangeTick() }
+    private var rangeWatchOn = false
+    private var rangeKind = "ok"
+    private var rangeRaw = "ok"
+    private var rangeSince = 0L
+    private var hdrFlag = false
+    private var peakFlag = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +157,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startRangeWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -190,6 +200,11 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun rangeState(call: PluginCall) {
+        call.resolve(rangePayload())
     }
 
     @PluginMethod
@@ -625,7 +640,102 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun rangePayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", rangeKind)
+        o.put("hdrOn", hdrFlag)
+        o.put("peakOn", peakFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startRangeWatch() {
+        stopRangeWatch()
+        rangeKind = "ok"
+        rangeRaw = "ok"
+        rangeSince = 0L
+        hdrFlag = false
+        peakFlag = false
+        rangeWatchOn = true
+        readRangeFlags()
+        tickRange(forceRaw = false)
+        mainHandler.postDelayed(rangeTick, 800)
+    }
+
+    private fun stopRangeWatch() {
+        rangeWatchOn = false
+        mainHandler.removeCallbacks(rangeTick)
+        rangeKind = "ok"
+        hdrFlag = false
+        peakFlag = false
+    }
+
+    private fun onRangeTick() {
+        if (!rangeWatchOn) return
+        readRangeFlags()
+        tickRange(forceRaw = false)
+        mainHandler.postDelayed(rangeTick, 800)
+    }
+
+    private fun readRangeFlags() {
+        hdrFlag = false
+        peakFlag = false
+        try {
+            val display = activity?.windowManager?.defaultDisplay ?: return
+            if (Build.VERSION.SDK_INT >= 26) {
+                hdrFlag = display.isHdr
+            }
+            if (Build.VERSION.SDK_INT >= 34) {
+                val info = display.brightnessInfo
+                if (info != null && info.currentBrightness >= 0.92f) {
+                    peakFlag = true
+                }
+            }
+            if (!peakFlag) {
+                try {
+                    val raw = Settings.System.getInt(
+                        context.contentResolver,
+                        Settings.System.SCREEN_BRIGHTNESS,
+                    )
+                    peakFlag = raw >= 235
+                } catch (_: Exception) {
+                    /* brightness optional */
+                }
+            }
+            val win = activity?.window?.attributes?.screenBrightness ?: -1f
+            if (win >= 0.92f) peakFlag = true
+        } catch (_: Exception) {
+            /* range optional */
+        }
+    }
+
+    private fun tickRange(forceRaw: Boolean) {
+        val raw = if (hdrFlag) "hdr" else if (peakFlag) "peak" else "ok"
+        val now = System.currentTimeMillis()
+        if (rangeSince == 0L) {
+            rangeSince = now
+            rangeRaw = raw
+            rangeKind = "ok"
+            return
+        }
+        if (forceRaw || raw != rangeRaw) {
+            rangeRaw = raw
+            rangeSince = now
+            if (forceRaw) {
+                rangeKind = raw
+                notifyListeners("rangeChanged", rangePayload())
+            }
+            return
+        }
+        if (raw == rangeKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - rangeSince < need) return
+        rangeKind = raw
+        notifyListeners("rangeChanged", rangePayload())
+    }
+
     private fun detachArView() {
+        stopRangeWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
