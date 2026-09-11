@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "voiceState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,107 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var voiceTimer: Timer?
+    private var voiceObservers: [NSObjectProtocol] = []
+    private var voiceKind = "ok"
+    private var voiceRaw = "ok"
+    private var voiceSince: TimeInterval = 0
+    private var voiceFlag = false
+    private var keysFlag = false
+
+    @objc func voiceState(_ call: CAPPluginCall) {
+        call.resolve(voicePayload())
+    }
+
+    private func voicePayload() -> [String: Any] {
+        [
+            "kind": voiceKind,
+            "voiceOn": voiceFlag,
+            "keysOn": keysFlag,
+            "valid": true
+        ]
+    }
+
+    private func startVoiceWatch() {
+        stopVoiceWatch()
+        voiceKind = "ok"
+        voiceRaw = "ok"
+        voiceSince = 0
+        readVoiceFlags()
+        tickVoice(forceRaw: false)
+        voiceObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIAccessibility.voiceControlStatusDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.readVoiceFlags()
+                self?.tickVoice(forceRaw: false)
+            }
+        )
+        if #available(iOS 14.0, *) {
+            voiceObservers.append(
+                NotificationCenter.default.addObserver(
+                    forName: UIAccessibility.fullKeyboardAccessStatusDidChangeNotification,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.readVoiceFlags()
+                    self?.tickVoice(forceRaw: false)
+                }
+            )
+        }
+        voiceTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.readVoiceFlags()
+            self?.tickVoice(forceRaw: false)
+        }
+    }
+
+    private func stopVoiceWatch() {
+        voiceTimer?.invalidate()
+        voiceTimer = nil
+        for observer in voiceObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        voiceObservers.removeAll()
+        voiceKind = "ok"
+        voiceFlag = false
+        keysFlag = false
+    }
+
+    private func readVoiceFlags() {
+        voiceFlag = UIAccessibility.isVoiceControlRunning
+        if #available(iOS 14.0, *) {
+            keysFlag = UIAccessibility.isFullKeyboardAccessEnabled
+        } else {
+            keysFlag = false
+        }
+    }
+
+    private func tickVoice(forceRaw: Bool) {
+        let raw = voiceFlag ? "voice" : (keysFlag ? "keys" : "ok")
+        let now = Date().timeIntervalSince1970
+        if voiceSince == 0 {
+            voiceSince = now
+            voiceRaw = raw
+            voiceKind = "ok"
+            return
+        }
+        if forceRaw || raw != voiceRaw {
+            voiceRaw = raw
+            voiceSince = now
+            if forceRaw {
+                voiceKind = raw
+                notifyListeners("voiceChanged", data: voicePayload())
+            }
+            return
+        }
+        if raw == voiceKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - voiceSince < need { return }
+        voiceKind = raw
+        notifyListeners("voiceChanged", data: voicePayload())
+    }
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -107,6 +209,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
 
         addReticle(to: view)
         arView = view
+        startVoiceWatch()
     }
 
     private func addReticle(to view: ARSCNView) {
@@ -120,6 +223,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopVoiceWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

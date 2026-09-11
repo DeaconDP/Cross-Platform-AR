@@ -20,12 +20,20 @@ export interface CubeARTrackingEvent {
     state: "initializing" | "ready" | "limited" | "unavailable";
     message?: string;
 }
+export interface CubeARVoiceState {
+    kind: string;
+    voiceOn: boolean;
+    keysOn: boolean;
+    valid: boolean;
+}
 export interface CubeARPlugin {
     isSupported(): Promise<CubeARSupportResult>;
     startSession(options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+    voiceState(): Promise<CubeARVoiceState>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;
+    addListener(eventName: "voiceChanged", listenerFunc: (event: CubeARVoiceState) => void): Promise<PluginListenerHandle>;
     removeAllListeners(): Promise<void>;
 }

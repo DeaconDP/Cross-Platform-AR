@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async voiceState() {
+        return { kind: "ok", voiceOn: false, keysOn: false, valid: false };
+    }
 }

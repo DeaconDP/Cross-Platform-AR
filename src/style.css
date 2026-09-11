@@ -223,6 +223,12 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+#ar-overlay.is-ar-voice-voice .ar-hint,
+#ar-overlay.is-ar-voice-keys .ar-hint {
+  outline: 2px solid var(--accent, #30d158);
+  outline-offset: 4px;
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;

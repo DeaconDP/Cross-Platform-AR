@@ -1,5 +1,7 @@
 # TODO
 
+- [x] Voice Control / keyboard steward: shared `ar-voice` + native `voiceState` / `voiceChanged` (2026-09-11)
+- [ ] Physical device QA: Voice Control / Voice Access still places a cube
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)

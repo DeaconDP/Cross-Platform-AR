@@ -8,6 +8,11 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  arVoiceArm,
+  arVoiceCoach,
+  arVoiceParseNative,
+} from "./ar-voice";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -91,10 +96,43 @@ export async function startNativeAR(
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
 
+  let voiceKind: Parameters<typeof arVoiceCoach>[0] = "ok";
+  const applyVoice = (kind: Parameters<typeof arVoiceCoach>[0]) => {
+    voiceKind = kind;
+    const coach = arVoiceCoach(kind, "cubes");
+    if (coach) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = coach;
+    }
+    overlay.root.classList.toggle("is-ar-voice-voice", kind === "voice");
+    overlay.root.classList.toggle("is-ar-voice-keys", kind === "keys");
+  };
+  let voiceHandle: { remove: () => Promise<void> } | null = null;
+  try {
+    voiceHandle = await CubeAR.addListener("voiceChanged", (event) => {
+      applyVoice(arVoiceParseNative(event).kind);
+    });
+    applyVoice(arVoiceParseNative(await CubeAR.voiceState()).kind);
+  } catch {
+    /* plugin without voiceState */
+  }
+  const voiceArm = arVoiceArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arVoiceParseNative(await CubeAR.voiceState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind) => applyVoice(kind),
+  });
+
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
-      overlay.hint.textContent = event.message;
+      overlay.hint.textContent = arVoiceCoach(voiceKind, "cubes") ?? event.message;
     }
     if (debug.isEnabled()) {
       debug.tickNative({
@@ -158,6 +196,9 @@ export async function startNativeAR(
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
     trackingListener.remove();
+    voiceArm.dispose();
+    void voiceHandle?.remove();
+    overlay.root.classList.remove("is-ar-voice-voice", "is-ar-voice-keys");
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
     unwireDebug();

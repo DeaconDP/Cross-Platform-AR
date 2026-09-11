@@ -1,7 +1,10 @@
 package io.worldbuild.cubear.plugin
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
+import android.content.res.Configuration
+import android.database.ContentObserver
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -9,9 +12,11 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.accessibility.AccessibilityManager
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.Lifecycle
@@ -67,6 +72,15 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var voiceKind = "ok"
+    private var voiceRaw = "ok"
+    private var voiceSince = 0L
+    private var voiceFlag = false
+    private var keysFlag = false
+    private var voiceWatchOn = false
+    private var voiceObserver: ContentObserver? = null
+    private var voiceA11yListener: AccessibilityManager.AccessibilityStateChangeListener? = null
+    private val voiceTick = Runnable { onVoiceTick() }
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -78,6 +92,152 @@ class CubeArPlugin : Plugin() {
     companion object {
         // Camera + surface layout often needs >3s on mid-range phones after cold start.
         private const val SESSION_START_TIMEOUT_MS = 10000L
+    }
+
+    @PluginMethod
+    fun voiceState(call: PluginCall) {
+        call.resolve(voicePayload())
+    }
+
+    private fun voicePayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", voiceKind)
+        o.put("voiceOn", voiceFlag)
+        o.put("keysOn", keysFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startVoiceWatch() {
+        stopVoiceWatch()
+        voiceKind = "ok"
+        voiceRaw = "ok"
+        voiceSince = 0L
+        voiceFlag = false
+        keysFlag = false
+        voiceObserver = object : ContentObserver(mainHandler) {
+            override fun onChange(selfChange: Boolean) {
+                readVoiceFlags()
+                tickVoice(false)
+            }
+        }
+        try {
+            context.contentResolver.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES),
+                false,
+                voiceObserver!!,
+            )
+            context.contentResolver.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.ACCESSIBILITY_ENABLED),
+                false,
+                voiceObserver!!,
+            )
+        } catch (_: Exception) {
+            /* settings observer optional */
+        }
+        try {
+            val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+            if (am != null) {
+                voiceA11yListener = AccessibilityManager.AccessibilityStateChangeListener {
+                    readVoiceFlags()
+                    tickVoice(false)
+                }
+                am.addAccessibilityStateChangeListener(voiceA11yListener!!)
+            }
+        } catch (_: Exception) {
+            /* a11y listener optional */
+        }
+        voiceWatchOn = true
+        readVoiceFlags()
+        tickVoice(false)
+        mainHandler.postDelayed(voiceTick, 800)
+    }
+
+    private fun stopVoiceWatch() {
+        voiceWatchOn = false
+        mainHandler.removeCallbacks(voiceTick)
+        voiceObserver?.let {
+            try {
+                context.contentResolver.unregisterContentObserver(it)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        voiceObserver = null
+        voiceA11yListener?.let { listener ->
+            try {
+                val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+                am?.removeAccessibilityStateChangeListener(listener)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        voiceA11yListener = null
+        voiceKind = "ok"
+        voiceFlag = false
+        keysFlag = false
+    }
+
+    private fun onVoiceTick() {
+        if (!voiceWatchOn) return
+        readVoiceFlags()
+        tickVoice(false)
+        mainHandler.postDelayed(voiceTick, 800)
+    }
+
+    private fun readVoiceFlags() {
+        voiceFlag = false
+        keysFlag = false
+        try {
+            val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+            if (am != null && am.isEnabled) {
+                val list = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                if (list != null) {
+                    for (info in list) {
+                        val id = (info.id ?: "").lowercase()
+                        if (id.contains("voiceaccess") || id.contains("voice_access")) {
+                            voiceFlag = true
+                            break
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            voiceFlag = false
+        }
+        try {
+            val cfg = context.resources.configuration
+            keysFlag =
+                cfg.keyboard == Configuration.KEYBOARD_QWERTY &&
+                    cfg.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+        } catch (_: Exception) {
+            keysFlag = false
+        }
+    }
+
+    private fun tickVoice(forceRaw: Boolean) {
+        val raw = if (voiceFlag) "voice" else if (keysFlag) "keys" else "ok"
+        val now = System.currentTimeMillis()
+        if (voiceSince == 0L) {
+            voiceSince = now
+            voiceRaw = raw
+            voiceKind = "ok"
+            return
+        }
+        if (forceRaw || raw != voiceRaw) {
+            voiceRaw = raw
+            voiceSince = now
+            if (forceRaw) {
+                voiceKind = raw
+                notifyListeners("voiceChanged", voicePayload())
+            }
+            return
+        }
+        if (raw == voiceKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - voiceSince < need) return
+        voiceKind = raw
+        notifyListeners("voiceChanged", voicePayload())
     }
 
     @PluginMethod
@@ -223,6 +383,7 @@ class CubeArPlugin : Plugin() {
 
     private fun attachArView(onReady: () -> Unit, onFailed: (Exception) -> Unit = {}) {
         detachArView()
+        startVoiceWatch()
 
         val activity = activity as? ComponentActivity
             ?: throw IllegalStateException("No activity")
@@ -626,6 +787,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopVoiceWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
