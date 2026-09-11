@@ -1,14 +1,21 @@
 package io.worldbuild.cubear.plugin
 
 import android.Manifest
+import android.app.ActivityManager
+import android.app.usage.UsageStatsManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +74,12 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var dozeKind = "ok"
+    private var dozeRaw = "ok"
+    private var dozeSince = 0L
+    private var restrictFlag = false
+    private var optimizeFlag = false
+    private var dozeReceiver: BroadcastReceiver? = null
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -190,6 +203,11 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun dozeState(call: PluginCall) {
+        call.resolve(dozePayload())
     }
 
     @PluginMethod
@@ -353,6 +371,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        startDozeWatch()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -625,7 +644,124 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun dozePayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", dozeKind)
+        o.put("restrict", restrictFlag)
+        o.put("optimize", optimizeFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startDozeWatch() {
+        stopDozeWatch()
+        dozeKind = "ok"
+        dozeRaw = "ok"
+        dozeSince = 0
+        readDozeFlags()
+        tickDoze(false)
+        val filter = IntentFilter(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                readDozeFlags()
+                tickDoze(false)
+            }
+        }
+        dozeReceiver = receiver
+        val ctx = context ?: return
+        if (Build.VERSION.SDK_INT >= 33) {
+            ctx.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            ctx.registerReceiver(receiver, filter)
+        }
+    }
+
+    private fun stopDozeWatch() {
+        dozeReceiver?.let { receiver ->
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        dozeReceiver = null
+        dozeKind = "ok"
+        restrictFlag = false
+        optimizeFlag = false
+    }
+
+    private fun readDozeFlags() {
+        var restrict = false
+        var optimize = false
+        val ctx = context ?: run {
+            restrictFlag = false
+            optimizeFlag = false
+            return
+        }
+        try {
+            val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            if (pm?.isDeviceIdleMode == true) restrict = true
+        } catch (_: Exception) {
+            /* OEM builds can hide idle */
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 28) {
+                val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                if (am?.isBackgroundRestricted == true) restrict = true
+            }
+        } catch (_: Exception) {
+            /* older images */
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 28) {
+                val usm = ctx.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+                if (usm != null) {
+                    val bucket = usm.appStandbyBucket
+                    if (Build.VERSION.SDK_INT >= 30 &&
+                        bucket >= UsageStatsManager.STANDBY_BUCKET_RESTRICTED
+                    ) {
+                        restrict = true
+                    } else if (bucket >= UsageStatsManager.STANDBY_BUCKET_RARE) {
+                        optimize = true
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            /* usage stats optional */
+        }
+        if (restrict) optimize = true
+        restrictFlag = restrict
+        optimizeFlag = optimize
+    }
+
+    private fun tickDoze(forceRaw: Boolean) {
+        val raw = if (restrictFlag) "restrict" else if (optimizeFlag) "optimize" else "ok"
+        val now = System.currentTimeMillis()
+        if (dozeSince == 0L) {
+            dozeSince = now
+            dozeRaw = raw
+            dozeKind = "ok"
+            return
+        }
+        if (forceRaw || raw != dozeRaw) {
+            dozeRaw = raw
+            dozeSince = now
+            if (forceRaw) {
+                dozeKind = raw
+                notifyListeners("dozeChanged", dozePayload())
+            }
+            return
+        }
+        if (raw == dozeKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - dozeSince < need) return
+        dozeKind = raw
+        notifyListeners("dozeChanged", dozePayload())
+    }
+
     private fun detachArView() {
+        stopDozeWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

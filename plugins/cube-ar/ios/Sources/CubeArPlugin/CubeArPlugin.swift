@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "dozeState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var dozeTimer: Timer?
+    private var dozeObserver: NSObjectProtocol?
+    private var dozeKind = "ok"
+    private var dozeRaw = "ok"
+    private var dozeSince: TimeInterval = 0
+    private var restrictFlag = false
+    private var optimizeFlag = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +52,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startDozeWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -59,6 +68,10 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func dozeState(_ call: CAPPluginCall) {
+        call.resolve(dozePayload())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -119,7 +132,86 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         reticleNode = node
     }
 
+    private func dozePayload() -> [String: Any] {
+        [
+            "kind": dozeKind,
+            "restrict": restrictFlag,
+            "optimize": optimizeFlag,
+            "valid": true,
+        ]
+    }
+
+    private func startDozeWatch() {
+        stopDozeWatch()
+        dozeKind = "ok"
+        dozeRaw = "ok"
+        dozeSince = 0
+        readDozeFlags()
+        tickDoze(forceRaw: false)
+        dozeObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.backgroundRefreshStatusDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.readDozeFlags()
+            self?.tickDoze(forceRaw: false)
+        }
+        dozeTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.readDozeFlags()
+            self?.tickDoze(forceRaw: false)
+        }
+    }
+
+    private func stopDozeWatch() {
+        dozeTimer?.invalidate()
+        dozeTimer = nil
+        if let dozeObserver {
+            NotificationCenter.default.removeObserver(dozeObserver)
+        }
+        dozeObserver = nil
+        dozeKind = "ok"
+        restrictFlag = false
+        optimizeFlag = false
+    }
+
+    private func readDozeFlags() {
+        var restrict = false
+        var optimize = false
+        if UIApplication.shared.backgroundRefreshStatus == .restricted {
+            optimize = true
+        }
+        if restrict { optimize = true }
+        restrictFlag = restrict
+        optimizeFlag = optimize
+    }
+
+    private func tickDoze(forceRaw: Bool) {
+        let raw = restrictFlag ? "restrict" : (optimizeFlag ? "optimize" : "ok")
+        let now = Date().timeIntervalSince1970
+        if dozeSince == 0 {
+            dozeSince = now
+            dozeRaw = raw
+            dozeKind = "ok"
+            return
+        }
+        if forceRaw || raw != dozeRaw {
+            dozeRaw = raw
+            dozeSince = now
+            if forceRaw {
+                dozeKind = raw
+                notifyListeners("dozeChanged", data: dozePayload())
+            }
+            return
+        }
+        if raw == dozeKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - dozeSince < need { return }
+        dozeKind = raw
+        notifyListeners("dozeChanged", data: dozePayload())
+    }
+
     private func detachArView() {
+        stopDozeWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
