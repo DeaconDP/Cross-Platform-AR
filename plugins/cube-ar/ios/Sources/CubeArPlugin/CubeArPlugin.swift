@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "tapeState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,15 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var tapeTimer: Timer?
+    private var tapeCaptureObserver: NSObjectProtocol?
+    private var tapeShotObserver: NSObjectProtocol?
+    private var tapeKind = "ok"
+    private var tapeRaw = "ok"
+    private var tapeSince: TimeInterval = 0
+    private var recordFlag = false
+    private var shotFlag = false
+    private var lastShot: TimeInterval = 0
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +54,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startTapeWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -59,6 +70,99 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func tapeState(_ call: CAPPluginCall) {
+        call.resolve(tapePayload())
+    }
+
+    private func tapePayload() -> [String: Any] {
+        [
+            "kind": tapeKind,
+            "record": recordFlag,
+            "shot": shotFlag,
+            "valid": true,
+        ]
+    }
+
+    private func startTapeWatch() {
+        stopTapeWatch()
+        tapeKind = "ok"
+        tapeRaw = "ok"
+        tapeSince = 0
+        lastShot = 0
+        readTapeFlags()
+        tickTape(forceRaw: false)
+        tapeCaptureObserver = NotificationCenter.default.addObserver(
+            forName: UIScreen.capturedDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.readTapeFlags()
+            self?.tickTape(forceRaw: false)
+        }
+        tapeShotObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.userDidTakeScreenshotNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.lastShot = Date().timeIntervalSince1970
+            self?.readTapeFlags()
+            self?.tickTape(forceRaw: false)
+        }
+        tapeTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.readTapeFlags()
+            self?.tickTape(forceRaw: false)
+        }
+    }
+
+    private func stopTapeWatch() {
+        tapeTimer?.invalidate()
+        tapeTimer = nil
+        if let tapeCaptureObserver {
+            NotificationCenter.default.removeObserver(tapeCaptureObserver)
+        }
+        if let tapeShotObserver {
+            NotificationCenter.default.removeObserver(tapeShotObserver)
+        }
+        tapeCaptureObserver = nil
+        tapeShotObserver = nil
+        tapeKind = "ok"
+        recordFlag = false
+        shotFlag = false
+    }
+
+    private func readTapeFlags() {
+        let captured = UIScreen.main.isCaptured
+        let extra = UIScreen.screens.count > 1 || UIScreen.main.mirrored != nil
+        recordFlag = captured && !extra
+        let now = Date().timeIntervalSince1970
+        shotFlag = lastShot > 0 && (now - lastShot) < 2
+    }
+
+    private func tickTape(forceRaw: Bool) {
+        let raw = recordFlag ? "record" : (shotFlag ? "shot" : "ok")
+        let now = Date().timeIntervalSince1970
+        if tapeSince == 0 {
+            tapeSince = now
+            tapeRaw = raw
+            tapeKind = "ok"
+            return
+        }
+        if forceRaw || raw != tapeRaw {
+            tapeRaw = raw
+            tapeSince = now
+            if forceRaw {
+                tapeKind = raw
+                notifyListeners("tapeChanged", data: tapePayload())
+            }
+            return
+        }
+        if raw == tapeKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - tapeSince < need { return }
+        tapeKind = raw
+        notifyListeners("tapeChanged", data: tapePayload())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -120,6 +224,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopTapeWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil
