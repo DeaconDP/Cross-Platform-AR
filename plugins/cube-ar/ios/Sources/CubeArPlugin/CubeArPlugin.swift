@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "motorState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var motorTimer: Timer?
+    private var motorObserver: NSObjectProtocol?
+    private var motorKind = "ok"
+    private var motorRaw = "ok"
+    private var motorSince: TimeInterval = 0
+    private var switchFlag = false
+    private var dwellFlag = false
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +52,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startMotorWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -59,6 +68,82 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             self?.notifyListeners("sessionEnded", data: [:])
             call.resolve()
         }
+    }
+
+    @objc func motorState(_ call: CAPPluginCall) {
+        call.resolve(motorPayload())
+    }
+
+    private func motorPayload() -> [String: Any] {
+        [
+            "kind": motorKind,
+            "switchOn": switchFlag,
+            "dwell": dwellFlag,
+            "valid": true,
+        ]
+    }
+
+    private func startMotorWatch() {
+        stopMotorWatch()
+        motorKind = "ok"
+        motorRaw = "ok"
+        motorSince = 0
+        readMotorFlags()
+        tickMotor(forceRaw: false)
+        motorObserver = NotificationCenter.default.addObserver(
+            forName: UIAccessibility.switchControlStatusDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.readMotorFlags()
+            self?.tickMotor(forceRaw: false)
+        }
+        motorTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.readMotorFlags()
+            self?.tickMotor(forceRaw: false)
+        }
+    }
+
+    private func stopMotorWatch() {
+        motorTimer?.invalidate()
+        motorTimer = nil
+        if let motorObserver {
+            NotificationCenter.default.removeObserver(motorObserver)
+        }
+        motorObserver = nil
+        motorKind = "ok"
+        switchFlag = false
+        dwellFlag = false
+    }
+
+    private func readMotorFlags() {
+        switchFlag = UIAccessibility.isSwitchControlRunning
+        dwellFlag = false
+    }
+
+    private func tickMotor(forceRaw: Bool) {
+        let raw = switchFlag ? "switch" : (dwellFlag ? "dwell" : "ok")
+        let now = Date().timeIntervalSince1970
+        if motorSince == 0 {
+            motorSince = now
+            motorRaw = raw
+            motorKind = "ok"
+            return
+        }
+        if forceRaw || raw != motorRaw {
+            motorRaw = raw
+            motorSince = now
+            if forceRaw {
+                motorKind = raw
+                notifyListeners("motorChanged", data: motorPayload())
+            }
+            return
+        }
+        if raw == motorKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - motorSince < need { return }
+        motorKind = raw
+        notifyListeners("motorChanged", data: motorPayload())
     }
 
     @objc func onScreenTap(_ call: CAPPluginCall) {
@@ -120,6 +205,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopMotorWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

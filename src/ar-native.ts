@@ -8,6 +8,11 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  arMotorArm,
+  arMotorCoach,
+  arMotorParseNative,
+} from "./ar-motor";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -90,11 +95,44 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const defaultHint = overlay.hint.textContent;
+  let motorKind: Parameters<typeof arMotorCoach>[0] = "ok";
+  const applyMotor = (kind: Parameters<typeof arMotorCoach>[0]) => {
+    motorKind = kind;
+    const coach = arMotorCoach(kind, "cubes");
+    if (placed === 0) {
+      overlay.hint.hidden = false;
+      overlay.hint.textContent = coach ?? defaultHint;
+    }
+    overlay.root.classList.toggle("is-ar-motor-switch", kind === "switch");
+    overlay.root.classList.toggle("is-ar-motor-dwell", kind === "dwell");
+  };
+  let motorHandle: { remove: () => Promise<void> } | null = null;
+  try {
+    motorHandle = await CubeAR.addListener("motorChanged", (event) => {
+      applyMotor(arMotorParseNative(event).kind);
+    });
+    applyMotor(arMotorParseNative(await CubeAR.motorState()).kind);
+  } catch {
+    /* plugin without motorState */
+  }
+  const motorArm = arMotorArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arMotorParseNative(await CubeAR.motorState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind) => applyMotor(kind),
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
     if (event.message && placed === 0) {
-      overlay.hint.textContent = event.message;
+      overlay.hint.textContent = arMotorCoach(motorKind, "cubes") ?? event.message;
     }
     if (debug.isEnabled()) {
       debug.tickNative({
@@ -157,6 +195,9 @@ export async function startNativeAR(
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
+    motorArm.dispose();
+    void motorHandle?.remove();
+    overlay.root.classList.remove("is-ar-motor-switch", "is-ar-motor-dwell");
     trackingListener.remove();
     await CubeAR.removeAllListeners();
     document.body.classList.remove("ar-native-active");
