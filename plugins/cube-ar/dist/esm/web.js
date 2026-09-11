@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async tintState() {
+        return { kind: "ok", filter: false, diff: false, valid: true };
+    }
 }
