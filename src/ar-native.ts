@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arTurnArm, arTurnParseNative } from "./ar-turn";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -90,6 +91,31 @@ export async function startNativeAR(
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
   overlay.hint.textContent = "Move your phone to find a surface";
+  const defaultHint = "Move your phone to find a surface";
+  const applyTurn = (kind: "ok" | "lock" | "flip") => {
+    overlay.root.classList.toggle("is-ar-turn-flip", kind === "flip");
+    overlay.root.classList.toggle("is-ar-turn-lock", kind === "lock");
+  };
+  try {
+    applyTurn(arTurnParseNative(await CubeAR.turnState()).kind);
+  } catch {
+    /* plugin without turnState */
+  }
+  const turnArm = arTurnArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arTurnParseNative(await CubeAR.turnState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      applyTurn(kind);
+      if (placed === 0) overlay.hint.textContent = coach ?? defaultHint;
+    },
+  });
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -154,6 +180,8 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    turnArm.dispose();
+    overlay.root.classList.remove("is-ar-turn-flip", "is-ar-turn-lock");
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;

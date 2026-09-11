@@ -2,6 +2,8 @@ package io.worldbuild.cubear.plugin
 
 import android.Manifest
 import android.content.Context
+import android.content.res.Configuration
+import android.database.ContentObserver
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -9,6 +11,9 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
+import android.view.OrientationEventListener
+import android.view.Surface
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
@@ -67,6 +72,16 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var turnKind = "ok"
+    private var turnRaw = "ok"
+    private var turnSince = 0L
+    private var flipFlag = false
+    private var lockFlag = false
+    private var turnWatchOn = false
+    private var turnObserver: ContentObserver? = null
+    private var turnOrient: OrientationEventListener? = null
+    private var turnPhysicalDeg = -1
+    private val turnTick = Runnable { onTurnTick() }
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +163,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startTurnWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -180,6 +196,150 @@ class CubeArPlugin : Plugin() {
             depth++
         }
         return parts.joinToString(" ← ")
+    }
+
+    @PluginMethod
+    fun turnState(call: PluginCall) {
+        call.resolve(turnPayload())
+    }
+
+    private fun turnPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", turnKind)
+        o.put("flipOn", flipFlag)
+        o.put("lockOn", lockFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startTurnWatch() {
+        stopTurnWatch()
+        turnKind = "ok"
+        turnRaw = "ok"
+        turnSince = 0L
+        flipFlag = false
+        lockFlag = false
+        turnPhysicalDeg = -1
+        turnObserver = object : ContentObserver(mainHandler) {
+            override fun onChange(selfChange: Boolean) {
+                readTurnFlags()
+                tickTurn(false)
+            }
+        }
+        try {
+            context.contentResolver.registerContentObserver(
+                Settings.System.getUriFor(Settings.System.ACCELEROMETER_ROTATION),
+                false,
+                turnObserver!!,
+            )
+        } catch (_: Exception) {
+            /* settings observer optional */
+        }
+        try {
+            val listener = object : OrientationEventListener(context) {
+                override fun onOrientationChanged(orientation: Int) {
+                    turnPhysicalDeg = orientation
+                    readTurnFlags()
+                    tickTurn(false)
+                }
+            }
+            if (listener.canDetectOrientation()) {
+                listener.enable()
+                turnOrient = listener
+            }
+        } catch (_: Exception) {
+            turnOrient = null
+        }
+        turnWatchOn = true
+        readTurnFlags()
+        tickTurn(false)
+        mainHandler.postDelayed(turnTick, 800)
+    }
+
+    private fun stopTurnWatch() {
+        turnWatchOn = false
+        mainHandler.removeCallbacks(turnTick)
+        turnObserver?.let {
+            try {
+                context.contentResolver.unregisterContentObserver(it)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        turnObserver = null
+        try {
+            turnOrient?.disable()
+        } catch (_: Exception) {
+            /* already gone */
+        }
+        turnOrient = null
+        turnKind = "ok"
+        flipFlag = false
+        lockFlag = false
+        turnPhysicalDeg = -1
+    }
+
+    private fun onTurnTick() {
+        if (!turnWatchOn) return
+        readTurnFlags()
+        tickTurn(false)
+        mainHandler.postDelayed(turnTick, 800)
+    }
+
+    private fun readTurnFlags() {
+        lockFlag = false
+        flipFlag = false
+        try {
+            lockFlag = Settings.System.getInt(
+                context.contentResolver,
+                Settings.System.ACCELEROMETER_ROTATION,
+                1,
+            ) == 0
+        } catch (_: Exception) {
+            lockFlag = false
+        }
+        var interfaceLandscape = false
+        try {
+            val rot = activity?.windowManager?.defaultDisplay?.rotation ?: Surface.ROTATION_0
+            interfaceLandscape = rot == Surface.ROTATION_90 || rot == Surface.ROTATION_270
+        } catch (_: Exception) {
+            try {
+                interfaceLandscape =
+                    context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+            } catch (_: Exception) {
+                /* keep false */
+            }
+        }
+        if (turnPhysicalDeg >= 0) {
+            val d = ((turnPhysicalDeg % 360) + 360) % 360
+            val physicalLandscape = (d > 45 && d < 135) || (d > 225 && d < 315)
+            flipFlag = physicalLandscape != interfaceLandscape
+        }
+    }
+
+    private fun tickTurn(forceRaw: Boolean) {
+        val raw = if (flipFlag) "flip" else if (lockFlag) "lock" else "ok"
+        val now = System.currentTimeMillis()
+        if (turnSince == 0L) {
+            turnSince = now
+            turnRaw = raw
+            turnKind = "ok"
+            return
+        }
+        if (forceRaw || raw != turnRaw) {
+            turnRaw = raw
+            turnSince = now
+            if (forceRaw) {
+                turnKind = raw
+                notifyListeners("turnChanged", turnPayload())
+            }
+            return
+        }
+        if (raw == turnKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - turnSince < need) return
+        turnKind = raw
+        notifyListeners("turnChanged", turnPayload())
     }
 
     @PluginMethod
@@ -626,6 +786,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopTurnWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
