@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "skinState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,87 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var skinTimer: Timer?
+    private var skinKind = "ok"
+    private var skinRaw = "ok"
+    private var skinSince: TimeInterval = 0
+    private var forceFlag = false
+    private var darkFlag = false
+
+    @objc func skinState(_ call: CAPPluginCall) {
+        call.resolve(skinPayload())
+    }
+
+    private func skinPayload() -> [String: Any] {
+        [
+            "kind": skinKind,
+            "forceOn": forceFlag,
+            "darkOn": darkFlag,
+            "valid": true,
+        ]
+    }
+
+    private func startSkinWatch() {
+        stopSkinWatch()
+        skinKind = "ok"
+        skinRaw = "ok"
+        skinSince = 0
+        forceFlag = false
+        darkFlag = false
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.onSkinTick()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        skinTimer = timer
+        readSkinFlags()
+        tickSkin(forceRaw: false)
+    }
+
+    private func stopSkinWatch() {
+        skinTimer?.invalidate()
+        skinTimer = nil
+        skinKind = "ok"
+        forceFlag = false
+        darkFlag = false
+    }
+
+    private func onSkinTick() {
+        readSkinFlags()
+        tickSkin(forceRaw: false)
+    }
+
+    private func readSkinFlags() {
+        forceFlag = false
+        darkFlag = false
+        let style = bridge?.webView?.traitCollection.userInterfaceStyle
+            ?? UITraitCollection.current.userInterfaceStyle
+        darkFlag = style == .dark
+    }
+
+    private func tickSkin(forceRaw: Bool) {
+        let raw = forceFlag ? "force" : (darkFlag ? "dark" : "ok")
+        let now = Date().timeIntervalSince1970
+        if skinSince == 0 {
+            skinSince = now
+            skinRaw = raw
+            skinKind = "ok"
+            return
+        }
+        if forceRaw || raw != skinRaw {
+            skinRaw = raw
+            skinSince = now
+            if forceRaw {
+                skinKind = raw
+                notifyListeners("skinChanged", data: skinPayload())
+            }
+            return
+        }
+        if raw == skinKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - skinSince < need { return }
+        skinKind = raw
+        notifyListeners("skinChanged", data: skinPayload())
+    }
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -44,6 +126,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startSkinWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -120,6 +203,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopSkinWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

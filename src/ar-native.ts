@@ -8,6 +8,7 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import { arSkinArm, arSkinCoach, arSkinParseNative } from "./ar-skin";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -87,9 +88,42 @@ export async function startNativeAR(
   const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
 
   let placed = 0;
+  const defaultHint = "Move your phone to find a surface";
   overlay.count.textContent = "0";
   overlay.hint.hidden = false;
-  overlay.hint.textContent = "Move your phone to find a surface";
+  overlay.hint.textContent = defaultHint;
+  const applySkinClass = (kind: "ok" | "dark" | "force") => {
+    overlay.root.classList.toggle("is-ar-skin-force", kind === "force");
+    overlay.root.classList.toggle("is-ar-skin-dark", kind === "dark");
+  };
+  const skinArm = arSkinArm({
+    product: "cubes",
+    root: overlay.root,
+    getNative: async () => {
+      try {
+        return arSkinParseNative(await CubeAR.skinState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (kind, coach) => {
+      applySkinClass(kind);
+      if (placed === 0) overlay.hint.textContent = coach ?? defaultHint;
+    },
+  });
+  let skinHandle: { remove: () => Promise<void> } | null = null;
+  try {
+    skinHandle = await CubeAR.addListener("skinChanged", (data) => {
+      const parsed = arSkinParseNative(data);
+      applySkinClass(parsed.kind);
+      if (placed === 0) {
+        overlay.hint.textContent =
+          arSkinCoach(parsed.kind, "cubes") ?? defaultHint;
+      }
+    });
+  } catch {
+    /* plugin without skinState */
+  }
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
@@ -154,6 +188,9 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    skinArm.dispose();
+    void skinHandle?.remove();
+    overlay.root.classList.remove("is-ar-skin-force", "is-ar-skin-dark");
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;
