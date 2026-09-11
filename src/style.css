@@ -223,6 +223,11 @@ body.ar-native-active #ar-overlay {
   display: none;
 }
 
+.is-ar-tape-record .ar-hint,
+.is-ar-tape-shot .ar-hint {
+  max-width: 24rem;
+}
+
 .ar-exit {
   pointer-events: auto;
   min-height: 48px;

@@ -32,6 +32,12 @@ export interface CubeARPlugin {
   startSession(options: CubeARSessionOptions): Promise<void>;
   stopSession(): Promise<void>;
   onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+  tapeState(): Promise<{
+    kind: string;
+    record: boolean;
+    shot: boolean;
+    valid: boolean;
+  }>;
   addListener(
     eventName: "trackingChanged",
     listenerFunc: (event: CubeARTrackingEvent) => void,
@@ -39,6 +45,15 @@ export interface CubeARPlugin {
   addListener(
     eventName: "sessionEnded",
     listenerFunc: () => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "tapeChanged",
+    listenerFunc: (event: {
+      kind?: string;
+      record?: boolean;
+      shot?: boolean;
+      valid?: boolean;
+    }) => void,
   ): Promise<PluginListenerHandle>;
   removeAllListeners(): Promise<void>;
 }

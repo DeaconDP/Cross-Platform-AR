@@ -1,18 +1,22 @@
 package io.worldbuild.cubear.plugin
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.Window
 import android.widget.FrameLayout
+import java.util.function.Consumer
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -67,6 +71,17 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var tapeKind = "ok"
+    private var tapeRaw = "ok"
+    private var tapeSince = 0L
+    private var recordFlag = false
+    private var shotFlag = false
+    private var recordingVisible = false
+    private var lastShotMs = 0L
+    private var tapeWatchOn = false
+    private var screenCaptureCallback: Activity.ScreenCaptureCallback? = null
+    private var screenRecordingCallback: Consumer<Int>? = null
+    private val tapeTick = Runnable { onTapeTick() }
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +163,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startTapeWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -190,6 +206,129 @@ class CubeArPlugin : Plugin() {
             notifySessionEnded()
             call.resolve()
         }
+    }
+
+    @PluginMethod
+    fun tapeState(call: PluginCall) {
+        call.resolve(tapePayload())
+    }
+
+    private fun tapePayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", tapeKind)
+        o.put("record", recordFlag)
+        o.put("shot", shotFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startTapeWatch() {
+        stopTapeWatch()
+        tapeKind = "ok"
+        tapeRaw = "ok"
+        tapeSince = 0L
+        lastShotMs = 0L
+        recordingVisible = false
+        recordFlag = false
+        shotFlag = false
+        val act = activity ?: return
+        if (Build.VERSION.SDK_INT >= 34) {
+            val cb = Activity.ScreenCaptureCallback {
+                lastShotMs = System.currentTimeMillis()
+                readTapeFlags()
+                tickTape(false)
+            }
+            screenCaptureCallback = cb
+            act.registerScreenCaptureCallback(act.mainExecutor, cb)
+        }
+        if (Build.VERSION.SDK_INT >= 35) {
+            val window = act.window
+            if (window != null) {
+                val recCb = Consumer<Int> { state ->
+                    recordingVisible = state == Window.SCREEN_RECORDING_STATE_VISIBLE
+                    readTapeFlags()
+                    tickTape(false)
+                }
+                screenRecordingCallback = recCb
+                window.addScreenRecordingCallback(act.mainExecutor, recCb)
+            }
+        }
+        tapeWatchOn = true
+        readTapeFlags()
+        tickTape(false)
+        mainHandler.postDelayed(tapeTick, 800)
+    }
+
+    private fun stopTapeWatch() {
+        tapeWatchOn = false
+        mainHandler.removeCallbacks(tapeTick)
+        val act = activity
+        if (act != null && Build.VERSION.SDK_INT >= 34) {
+            screenCaptureCallback?.let {
+                try {
+                    act.unregisterScreenCaptureCallback(it)
+                } catch (_: Exception) {
+                    /* already gone */
+                }
+            }
+        }
+        if (act != null && Build.VERSION.SDK_INT >= 35) {
+            screenRecordingCallback?.let { cb ->
+                try {
+                    act.window?.removeScreenRecordingCallback(cb)
+                } catch (_: Exception) {
+                    /* already gone */
+                }
+            }
+        }
+        screenCaptureCallback = null
+        screenRecordingCallback = null
+        tapeKind = "ok"
+        recordFlag = false
+        shotFlag = false
+        recordingVisible = false
+    }
+
+    private fun onTapeTick() {
+        if (!tapeWatchOn) return
+        readTapeFlags()
+        tickTape(false)
+        mainHandler.postDelayed(tapeTick, 800)
+    }
+
+    private fun readTapeFlags() {
+        val now = System.currentTimeMillis()
+        shotFlag = lastShotMs > 0 && now - lastShotMs < 2000
+        recordFlag = recordingVisible
+    }
+
+    private fun tickTape(forceRaw: Boolean) {
+        val raw = when {
+            recordFlag -> "record"
+            shotFlag -> "shot"
+            else -> "ok"
+        }
+        val now = System.currentTimeMillis()
+        if (tapeSince == 0L) {
+            tapeSince = now
+            tapeRaw = raw
+            tapeKind = "ok"
+            return
+        }
+        if (forceRaw || raw != tapeRaw) {
+            tapeRaw = raw
+            tapeSince = now
+            if (forceRaw) {
+                tapeKind = raw
+                notifyListeners("tapeChanged", tapePayload())
+            }
+            return
+        }
+        if (raw == tapeKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - tapeSince < need) return
+        tapeKind = raw
+        notifyListeners("tapeChanged", tapePayload())
     }
 
     @PluginMethod
@@ -626,6 +765,7 @@ class CubeArPlugin : Plugin() {
     }
 
     private fun detachArView() {
+        stopTapeWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

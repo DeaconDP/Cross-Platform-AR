@@ -1,5 +1,7 @@
 # TODO
 
+- [x] Shared `arTape` record > shot > ok + native `tapeState` / `tapeChanged` (2026-09-11)
+- [ ] Physical device QA: screen-record / ReplayKit coach on iOS + Android 15
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)
