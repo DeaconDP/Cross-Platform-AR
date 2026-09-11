@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async hzState() {
+        return { kind: "ok", slowOn: false, softOn: false, hz: 0, valid: false };
+    }
 }
