@@ -2,7 +2,9 @@ package io.worldbuild.cubear.plugin
 
 import android.Manifest
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Color
+import android.os.Build
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -12,6 +14,8 @@ import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.webkit.WebSettings
+import android.webkit.WebView
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.Lifecycle
@@ -67,6 +71,15 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var skinWatchOn = false
+    private var skinKind = "ok"
+    private var skinRaw = "ok"
+    private var skinSince = 0L
+    private var forceFlag = false
+    private var darkFlag = false
+    private var savedForceDark: Int? = null
+    private var savedAlgoDark: Boolean? = null
+    private val skinTick = Runnable { onSkinTick() }
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -183,6 +196,11 @@ class CubeArPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun skinState(call: PluginCall) {
+        call.resolve(skinPayload())
+    }
+
+    @PluginMethod
     fun stopSession(call: PluginCall) {
         pendingStartCall = null
         bridge.executeOnMainThread {
@@ -230,6 +248,7 @@ class CubeArPlugin : Plugin() {
 
         webView.setBackgroundColor(Color.TRANSPARENT)
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        softenWebViewDark(webView)
 
         var parent: android.view.ViewParent? = webView.parent
         while (parent is View) {
@@ -353,6 +372,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        startSkinWatch()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -625,7 +645,139 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun skinPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", skinKind)
+        o.put("forceOn", forceFlag)
+        o.put("darkOn", darkFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startSkinWatch() {
+        stopSkinWatch()
+        skinKind = "ok"
+        skinRaw = "ok"
+        skinSince = 0L
+        forceFlag = false
+        darkFlag = false
+        skinWatchOn = true
+        readSkinFlags()
+        tickSkin(forceRaw = false)
+        mainHandler.postDelayed(skinTick, 800)
+    }
+
+    private fun stopSkinWatch() {
+        skinWatchOn = false
+        mainHandler.removeCallbacks(skinTick)
+        skinKind = "ok"
+        forceFlag = false
+        darkFlag = false
+    }
+
+    private fun onSkinTick() {
+        if (!skinWatchOn) return
+        readSkinFlags()
+        tickSkin(forceRaw = false)
+        mainHandler.postDelayed(skinTick, 800)
+    }
+
+    private fun softenWebViewDark(webView: View) {
+        val ws = (webView as? WebView)?.settings ?: return
+        try {
+            if (Build.VERSION.SDK_INT >= 29 && savedForceDark == null) {
+                savedForceDark = ws.forceDark
+                ws.forceDark = WebSettings.FORCE_DARK_OFF
+            }
+            if (Build.VERSION.SDK_INT >= 33 && savedAlgoDark == null) {
+                savedAlgoDark = ws.isAlgorithmicDarkeningAllowed
+                ws.isAlgorithmicDarkeningAllowed = false
+            }
+        } catch (_: Exception) {
+            /* optional */
+        }
+    }
+
+    private fun restoreWebViewDark(webView: View) {
+        val ws = (webView as? WebView)?.settings ?: return
+        try {
+            val force = savedForceDark
+            if (force != null && Build.VERSION.SDK_INT >= 29) {
+                ws.forceDark = force
+            }
+            val algo = savedAlgoDark
+            if (algo != null && Build.VERSION.SDK_INT >= 33) {
+                ws.isAlgorithmicDarkeningAllowed = algo
+            }
+        } catch (_: Exception) {
+            /* optional */
+        }
+        savedForceDark = null
+        savedAlgoDark = null
+    }
+
+    private fun readSkinFlags() {
+        forceFlag = false
+        darkFlag = false
+        try {
+            val night = context.resources.configuration.uiMode and
+                Configuration.UI_MODE_NIGHT_MASK
+            darkFlag = night == Configuration.UI_MODE_NIGHT_YES
+            val savedForce = savedForceDark
+            if (savedForce != null) {
+                if (savedForce == WebSettings.FORCE_DARK_ON) forceFlag = true
+                if (savedForce == WebSettings.FORCE_DARK_AUTO && darkFlag) forceFlag = true
+            }
+            if (savedAlgoDark == true && darkFlag) forceFlag = true
+            if (!forceFlag) {
+                val ws = (bridge.webView as? WebView)?.settings
+                if (ws != null && Build.VERSION.SDK_INT >= 29) {
+                    val fd = ws.forceDark
+                    if (fd == WebSettings.FORCE_DARK_ON) forceFlag = true
+                    if (fd == WebSettings.FORCE_DARK_AUTO && darkFlag) forceFlag = true
+                }
+                if (
+                    !forceFlag &&
+                    ws != null &&
+                    Build.VERSION.SDK_INT >= 33 &&
+                    ws.isAlgorithmicDarkeningAllowed &&
+                    darkFlag
+                ) {
+                    forceFlag = true
+                }
+            }
+        } catch (_: Exception) {
+            /* skin optional */
+        }
+    }
+
+    private fun tickSkin(forceRaw: Boolean) {
+        val raw = if (forceFlag) "force" else if (darkFlag) "dark" else "ok"
+        val now = System.currentTimeMillis()
+        if (skinSince == 0L) {
+            skinSince = now
+            skinRaw = raw
+            skinKind = "ok"
+            return
+        }
+        if (forceRaw || raw != skinRaw) {
+            skinRaw = raw
+            skinSince = now
+            if (forceRaw) {
+                skinKind = raw
+                notifyListeners("skinChanged", skinPayload())
+            }
+            return
+        }
+        if (raw == skinKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - skinSince < need) return
+        skinKind = raw
+        notifyListeners("skinChanged", skinPayload())
+    }
+
     private fun detachArView() {
+        stopSkinWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
@@ -640,6 +792,7 @@ class CubeArPlugin : Plugin() {
         arLifecycleOwner = null
 
         val webView = bridge.webView
+        restoreWebViewDark(webView)
         webView.setBackgroundColor(Color.WHITE)
         webView.setLayerType(View.LAYER_TYPE_NONE, null)
     }
