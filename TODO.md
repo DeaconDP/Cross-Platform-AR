@@ -1,5 +1,7 @@
 # TODO
 
+- [x] AR system-veil steward: Control Center / shade / heads-up banner coach (`src/ar-veil.ts`, native `veilState`) — 2026-09-11
+- [ ] Physical device QA: pull shade / Control Center mid-session, confirm coach + tap still places
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)

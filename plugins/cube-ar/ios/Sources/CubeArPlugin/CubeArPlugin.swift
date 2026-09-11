@@ -12,6 +12,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "startSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "onScreenTap", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "veilState", returnType: CAPPluginReturnPromise),
     ]
 
     private var arView: ARSCNView?
@@ -20,6 +21,13 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     private var placedCount = 0
     private var surfaceFound = false
     private var reticleNode: SCNNode?
+    private var veilTimer: Timer?
+    private var veilKind = "ok"
+    private var veilRaw = "ok"
+    private var veilSince: TimeInterval = 0
+    private var coverFlag = false
+    private var peekFlag = false
+    private var veilObservers: [NSObjectProtocol] = []
 
     @objc func isSupported(_ call: CAPPluginCall) {
         let supported = ARWorldTrackingConfiguration.isSupported
@@ -27,6 +35,97 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             "supported": supported,
             "backend": supported ? "arkit" : "none",
         ])
+    }
+
+    @objc func veilState(_ call: CAPPluginCall) {
+        call.resolve(veilPayload())
+    }
+
+    private func veilPayload() -> [String: Any] {
+        [
+            "kind": veilKind,
+            "coverOn": coverFlag,
+            "peekOn": peekFlag,
+            "valid": true
+        ]
+    }
+
+    private func startVeilWatch() {
+        stopVeilWatch()
+        veilKind = "ok"
+        veilRaw = "ok"
+        veilSince = 0
+        coverFlag = false
+        peekFlag = false
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+            self?.onVeilTick()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        veilTimer = timer
+        let center = NotificationCenter.default
+        veilObservers.append(center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.onVeilTick()
+        })
+        veilObservers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.onVeilTick()
+        })
+        readVeilFlags()
+        tickVeil(forceRaw: false)
+    }
+
+    private func stopVeilWatch() {
+        veilTimer?.invalidate()
+        veilTimer = nil
+        for observer in veilObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        veilObservers.removeAll()
+        veilKind = "ok"
+        coverFlag = false
+        peekFlag = false
+    }
+
+    private func onVeilTick() {
+        readVeilFlags()
+        tickVeil(forceRaw: false)
+    }
+
+    private func readVeilFlags() {
+        coverFlag = false
+        peekFlag = false
+        guard arView != nil else { return }
+        if UIApplication.shared.applicationState == .inactive {
+            coverFlag = true
+        }
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+            let height = scene.statusBarManager?.statusBarFrame.height ?? 0
+            if height >= 64 { peekFlag = true }
+        }
+    }
+
+    private func tickVeil(forceRaw: Bool) {
+        let raw = coverFlag ? "cover" : (peekFlag ? "peek" : "ok")
+        let now = Date().timeIntervalSince1970
+        if veilSince == 0 {
+            veilSince = now
+            veilRaw = raw
+            veilKind = "ok"
+            return
+        }
+        if forceRaw || raw != veilRaw {
+            veilRaw = raw
+            veilSince = now
+            if forceRaw {
+                veilKind = raw
+                notifyListeners("veilChanged", data: veilPayload())
+            }
+            return
+        }
+        if raw == veilKind { return }
+        let need: TimeInterval = raw == "ok" ? 0.8 : 0.4
+        if now - veilSince < need { return }
+        veilKind = raw
+        notifyListeners("veilChanged", data: veilPayload())
     }
 
     @objc func startSession(_ call: CAPPluginCall) {
@@ -44,6 +143,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
             guard let self = self else { return }
             do {
                 try self.attachArView()
+                self.startVeilWatch()
                 self.notifyTracking(state: "initializing", message: "Move phone to find a surface")
                 call.resolve()
             } catch {
@@ -120,6 +220,7 @@ public class CubeARPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func detachArView() {
+        stopVeilWatch()
         arView?.session.pause()
         arView?.removeFromSuperview()
         arView = nil

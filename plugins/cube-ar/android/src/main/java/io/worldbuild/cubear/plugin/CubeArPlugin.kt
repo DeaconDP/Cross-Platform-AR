@@ -7,11 +7,13 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.WindowInsets
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.Lifecycle
@@ -67,6 +69,13 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private val veilTick = Runnable { onVeilTick() }
+    private var veilWatchOn = false
+    private var veilKind = "ok"
+    private var veilRaw = "ok"
+    private var veilSince = 0L
+    private var coverFlag = false
+    private var peekFlag = false
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -148,6 +157,7 @@ class CubeArPlugin : Plugin() {
             try {
                 attachArView(
                     onReady = {
+                        startVeilWatch()
                         notifyTracking("initializing", "Starting ARCore session")
                         call.resolve()
                     },
@@ -180,6 +190,11 @@ class CubeArPlugin : Plugin() {
             depth++
         }
         return parts.joinToString(" ← ")
+    }
+
+    @PluginMethod
+    fun veilState(call: PluginCall) {
+        call.resolve(veilPayload())
     }
 
     @PluginMethod
@@ -625,7 +640,92 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun veilPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", veilKind)
+        o.put("coverOn", coverFlag)
+        o.put("peekOn", peekFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startVeilWatch() {
+        stopVeilWatch()
+        veilKind = "ok"
+        veilRaw = "ok"
+        veilSince = 0
+        coverFlag = false
+        peekFlag = false
+        veilWatchOn = true
+        readVeilFlags()
+        tickVeil(false)
+        mainHandler.postDelayed(veilTick, 800)
+    }
+
+    private fun stopVeilWatch() {
+        veilWatchOn = false
+        mainHandler.removeCallbacks(veilTick)
+        veilKind = "ok"
+        coverFlag = false
+        peekFlag = false
+    }
+
+    private fun onVeilTick() {
+        if (!veilWatchOn) return
+        readVeilFlags()
+        tickVeil(false)
+        mainHandler.postDelayed(veilTick, 800)
+    }
+
+    private fun readVeilFlags() {
+        coverFlag = false
+        peekFlag = false
+        if (arSceneView == null) return
+        val host = activity ?: return
+        try {
+            if (!host.hasWindowFocus()) {
+                coverFlag = true
+            }
+            if (Build.VERSION.SDK_INT >= 30) {
+                val insets = host.window.decorView.rootWindowInsets
+                if (insets != null) {
+                    val top = insets.getInsets(WindowInsets.Type.statusBars()).top
+                    val density = context.resources.displayMetrics.density
+                    if (density > 0f && top / density >= 52f) peekFlag = true
+                }
+            }
+        } catch (_: Exception) {
+            /* veil optional */
+        }
+    }
+
+    private fun tickVeil(forceRaw: Boolean) {
+        val raw = if (coverFlag) "cover" else if (peekFlag) "peek" else "ok"
+        val now = System.currentTimeMillis()
+        if (veilSince == 0L) {
+            veilSince = now
+            veilRaw = raw
+            veilKind = "ok"
+            return
+        }
+        if (forceRaw || raw != veilRaw) {
+            veilRaw = raw
+            veilSince = now
+            if (forceRaw) {
+                veilKind = raw
+                notifyListeners("veilChanged", veilPayload())
+            }
+            return
+        }
+        if (raw == veilKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - veilSince < need) return
+        veilKind = raw
+        notifyListeners("veilChanged", veilPayload())
+    }
+
     private fun detachArView() {
+        stopVeilWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false

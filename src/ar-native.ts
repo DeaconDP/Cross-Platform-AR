@@ -8,6 +8,11 @@ import {
   wireDebugToggle,
 } from "./ar-debug";
 import type { OverlayElements } from "./ar-webxr";
+import {
+  arVeilArm,
+  arVeilCoach,
+  arVeilParseNative,
+} from "./ar-veil";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -134,6 +139,35 @@ export async function startNativeAR(
 
   document.addEventListener("pointerdown", onTap);
 
+  const veil = arVeilArm({
+    product: "cubes",
+    root: document.body,
+    getNative: async () => {
+      try {
+        return arVeilParseNative(await CubeAR.veilState());
+      } catch {
+        return null;
+      }
+    },
+    onKind: (_kind, coach) => {
+      if (coach && placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+      }
+    },
+  });
+  try {
+    await CubeAR.addListener("veilChanged", (data) => {
+      const coach = arVeilCoach(arVeilParseNative(data).kind, "cubes");
+      if (coach && placed === 0) {
+        overlay.hint.hidden = false;
+        overlay.hint.textContent = coach;
+      }
+    });
+  } catch {
+    /* plugin without veilState */
+  }
+
   const onExit = async () => {
     overlay.exit.disabled = true;
     try {
@@ -154,6 +188,7 @@ export async function startNativeAR(
     overlay.root.hidden = false;
     await sessionEnded;
   } finally {
+    veil.dispose();
     document.removeEventListener("pointerdown", onTap);
     overlay.exit.removeEventListener("click", onExit);
     overlay.exit.disabled = false;

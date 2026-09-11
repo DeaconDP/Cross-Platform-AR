@@ -20,12 +20,20 @@ export interface CubeARTrackingEvent {
     state: "initializing" | "ready" | "limited" | "unavailable";
     message?: string;
 }
+export interface CubeARVeilState {
+    kind: string;
+    coverOn: boolean;
+    peekOn: boolean;
+    valid: boolean;
+}
 export interface CubeARPlugin {
     isSupported(): Promise<CubeARSupportResult>;
     startSession(options: CubeARSessionOptions): Promise<void>;
     stopSession(): Promise<void>;
     onScreenTap(options: CubeARTapOptions): Promise<CubeARTapResult>;
+    veilState(): Promise<CubeARVeilState>;
     addListener(eventName: "trackingChanged", listenerFunc: (event: CubeARTrackingEvent) => void): Promise<PluginListenerHandle>;
     addListener(eventName: "sessionEnded", listenerFunc: () => void): Promise<PluginListenerHandle>;
+    addListener(eventName: "veilChanged", listenerFunc: (event: Partial<CubeARVeilState>) => void): Promise<PluginListenerHandle>;
     removeAllListeners(): Promise<void>;
 }
