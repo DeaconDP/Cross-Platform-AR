@@ -12,4 +12,7 @@ export class CubeARWeb extends WebPlugin {
     async onScreenTap(_options) {
         return { placed: false, count: 0 };
     }
+    async motorState() {
+        return { kind: "ok", switchOn: false, dwell: false, valid: true };
+    }
 }

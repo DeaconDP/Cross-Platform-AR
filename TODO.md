@@ -1,5 +1,8 @@
 # TODO
 
+- [x] AR Switch Control / hover-click steward (`ar-motor` + native `motorState` / `motorChanged`) so Select still places a cube
+- [ ] Device QA: Switch Control / Switch Access / hover-click while placing a cube
+
 - [x] Scaffold Vite + TS + three.js, sticky port 5188, basic-ssl + LAN host
 - [x] Shared cube factory + inline orbit preview fallback
 - [x] WebXR immersive-ar path (hit-test reticle, tap to place, DOM overlay)

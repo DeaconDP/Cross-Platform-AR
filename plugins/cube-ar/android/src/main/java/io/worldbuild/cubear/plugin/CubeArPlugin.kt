@@ -1,7 +1,9 @@
 package io.worldbuild.cubear.plugin
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
+import android.database.ContentObserver
 import android.graphics.Color
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -9,8 +11,10 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityManager
 import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
@@ -67,6 +71,15 @@ class CubeArPlugin : Plugin() {
     private var arLifecycleOwner: PluginLifecycleOwner? = null
     private var sensorManager: SensorManager? = null
     private var imuWarmupListener: SensorEventListener? = null
+    private var motorKind = "ok"
+    private var motorRaw = "ok"
+    private var motorSince = 0L
+    private var switchFlag = false
+    private var dwellFlag = false
+    private var motorWatchOn = false
+    private var motorObserver: ContentObserver? = null
+    private var motorA11yListener: AccessibilityManager.AccessibilityStateChangeListener? = null
+    private val motorTick = Runnable { onMotorTick() }
 
     /** Owns a LifecycleRegistry we advance manually so attach-after-resume is safe. */
     private class PluginLifecycleOwner : LifecycleOwner {
@@ -180,6 +193,11 @@ class CubeArPlugin : Plugin() {
             depth++
         }
         return parts.joinToString(" ← ")
+    }
+
+    @PluginMethod
+    fun motorState(call: PluginCall) {
+        call.resolve(motorPayload())
     }
 
     @PluginMethod
@@ -353,6 +371,7 @@ class CubeArPlugin : Plugin() {
                         startControlledLifecycle(sceneView)
                         sessionFrameReceived = false
                         scheduleSessionWatchdog()
+                        startMotorWatch()
                         onReady()
                     } catch (ex: Exception) {
                         attachCompleted = false
@@ -625,7 +644,160 @@ class CubeArPlugin : Plugin() {
         sessionWatchdog = null
     }
 
+    private fun motorPayload(): JSObject {
+        val o = JSObject()
+        o.put("kind", motorKind)
+        o.put("switchOn", switchFlag)
+        o.put("dwell", dwellFlag)
+        o.put("valid", true)
+        return o
+    }
+
+    private fun startMotorWatch() {
+        stopMotorWatch()
+        motorKind = "ok"
+        motorRaw = "ok"
+        motorSince = 0L
+        switchFlag = false
+        dwellFlag = false
+        motorObserver = object : ContentObserver(mainHandler) {
+            override fun onChange(selfChange: Boolean) {
+                readMotorFlags()
+                tickMotor(false)
+            }
+        }
+        try {
+            val resolver = context.contentResolver
+            resolver.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES),
+                false,
+                motorObserver!!,
+            )
+            resolver.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.ACCESSIBILITY_ENABLED),
+                false,
+                motorObserver!!,
+            )
+            resolver.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.ACCESSIBILITY_AUTOCLICK_ENABLED),
+                false,
+                motorObserver!!,
+            )
+        } catch (_: Exception) {
+            /* settings observer optional */
+        }
+        try {
+            val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+            if (am != null) {
+                motorA11yListener = AccessibilityManager.AccessibilityStateChangeListener {
+                    readMotorFlags()
+                    tickMotor(false)
+                }
+                am.addAccessibilityStateChangeListener(motorA11yListener!!)
+            }
+        } catch (_: Exception) {
+            /* a11y listener optional */
+        }
+        motorWatchOn = true
+        readMotorFlags()
+        tickMotor(false)
+        mainHandler.postDelayed(motorTick, 800)
+    }
+
+    private fun stopMotorWatch() {
+        motorWatchOn = false
+        mainHandler.removeCallbacks(motorTick)
+        motorObserver?.let {
+            try {
+                context.contentResolver.unregisterContentObserver(it)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        motorObserver = null
+        motorA11yListener?.let { listener ->
+            try {
+                val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+                am?.removeAccessibilityStateChangeListener(listener)
+            } catch (_: Exception) {
+                /* already gone */
+            }
+        }
+        motorA11yListener = null
+        motorKind = "ok"
+        switchFlag = false
+        dwellFlag = false
+    }
+
+    private fun onMotorTick() {
+        if (!motorWatchOn) return
+        readMotorFlags()
+        tickMotor(false)
+        mainHandler.postDelayed(motorTick, 800)
+    }
+
+    private fun readMotorFlags() {
+        switchFlag = false
+        dwellFlag = false
+        try {
+            val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+            if (am != null && am.isEnabled) {
+                val list = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                if (list != null) {
+                    for (info in list) {
+                        val id = info.id?.lowercase() ?: ""
+                        if (
+                            id.contains("switchaccess") ||
+                            id.contains("switch_access") ||
+                            id.contains("switchaccessservice")
+                        ) {
+                            switchFlag = true
+                            break
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            switchFlag = false
+        }
+        try {
+            dwellFlag = Settings.Secure.getInt(
+                context.contentResolver,
+                Settings.Secure.ACCESSIBILITY_AUTOCLICK_ENABLED,
+                0,
+            ) == 1
+        } catch (_: Exception) {
+            dwellFlag = false
+        }
+    }
+
+    private fun tickMotor(forceRaw: Boolean) {
+        val raw = if (switchFlag) "switch" else if (dwellFlag) "dwell" else "ok"
+        val now = System.currentTimeMillis()
+        if (motorSince == 0L) {
+            motorSince = now
+            motorRaw = raw
+            motorKind = "ok"
+            return
+        }
+        if (forceRaw || raw != motorRaw) {
+            motorRaw = raw
+            motorSince = now
+            if (forceRaw) {
+                motorKind = raw
+                notifyListeners("motorChanged", motorPayload())
+            }
+            return
+        }
+        if (raw == motorKind) return
+        val need = if (raw == "ok") 800L else 400L
+        if (now - motorSince < need) return
+        motorKind = raw
+        notifyListeners("motorChanged", motorPayload())
+    }
+
     private fun detachArView() {
+        stopMotorWatch()
         cancelSessionWatchdog()
         sessionFrameReceived = false
         attachCompleted = false
