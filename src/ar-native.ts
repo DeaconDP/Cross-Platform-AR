@@ -1,5 +1,5 @@
 import { Capacitor } from "@capacitor/core";
-import { CubeAR } from "cube-ar";
+import { CubeAR, type CubeARTechnique } from "cube-ar";
 import { CUBE_COLOR_HEX, CUBE_SIZE, startPreview, stopPreview } from "./scene";
 import {
   type CompatSnapshot,
@@ -7,7 +7,11 @@ import {
   resetDebugOverlay,
   wireDebugToggle,
 } from "./ar-debug";
-import type { OverlayElements } from "./ar-webxr";
+import {
+  bindArGestures,
+  type ArGestureController,
+  type OverlayChrome,
+} from "./ar-gestures";
 
 /** Map native plugin rejection messages to actionable user guidance. */
 export function nativeARErrorMessage(err: unknown): string {
@@ -38,6 +42,18 @@ export function nativeARErrorMessage(err: unknown): string {
   if (/camera session timed out/i.test(msg)) {
     return "Native AR couldn't start the camera. Force-stop the app and try again.";
   }
+  if (/depth is not supported/i.test(msg)) {
+    return "Depth is not supported on this device.";
+  }
+  if (/missing image target asset/i.test(msg)) {
+    return "The bundled image marker is missing from the app build.";
+  }
+  if (/no front-facing camera config/i.test(msg)) {
+    return "This device has no front camera config for Augmented Faces.";
+  }
+  if (/android-only \(arcore\)/i.test(msg)) {
+    return msg;
+  }
   if (/^Failed to start native AR:/i.test(msg) || /^Failed to prepare ARCore:/i.test(msg)) {
     const detail = msg.replace(/^Failed to (start native AR|prepare ARCore):\s*/i, "").trim();
     if (detail && detail.toLowerCase() !== "null") return detail;
@@ -64,15 +80,22 @@ export async function isNativeARSupported(): Promise<{
   }
 }
 
+function setNativeActive(active: boolean): void {
+  document.documentElement.classList.toggle("is-ar-native", active);
+  document.body.classList.toggle("is-ar-native", active);
+  document.body.classList.toggle("ar-native-active", active);
+}
+
 /**
  * Capacitor shell path: ARKit (iOS) or ARCore (Android) below a transparent WebView.
- * Screen taps are forwarded from the web overlay to native raycasts.
+ * Gestures on the web overlay forward to native place / rotate / scale / move.
  */
 export async function startNativeAR(
-  overlay: OverlayElements,
+  chrome: OverlayChrome,
   snapshot: CompatSnapshot,
+  technique: CubeARTechnique = "place",
 ): Promise<void> {
-  const debug = new DebugCollector(overlay.debugPanel, {
+  const debug = new DebugCollector(chrome.debugPanel, {
     ...snapshot,
     arPath: "native",
   });
@@ -83,85 +106,137 @@ export async function startNativeAR(
   });
   debug.logEvent("native session start");
 
-  resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
-  const unwireDebug = wireDebugToggle(overlay.debugToggle, overlay.debugPanel, debug);
+  resetDebugOverlay(chrome.debugToggle, chrome.debugPanel);
+  const unwireDebug = wireDebugToggle(chrome.debugToggle, chrome.debugPanel, debug);
 
-  let placed = 0;
-  overlay.count.textContent = "0";
-  overlay.hint.hidden = false;
-  overlay.hint.textContent = "Move your phone to find a surface";
+  let placed = false;
+  let surfaceReady = false;
+  let scale = 1;
+  let spawning = false;
+  let spawnTimer = 0;
+  let gestures: ArGestureController | null = null;
 
   const trackingListener = await CubeAR.addListener("trackingChanged", (event) => {
     debug.logEvent(`tracking → ${event.state}`);
-    if (event.message && placed === 0) {
-      overlay.hint.textContent = event.message;
+    if (event.state === "ready") {
+      surfaceReady = true;
+      if (!placed) {
+        gestures?.setHint("TAP A FLAT SURFACE");
+      }
+    }
+    if (event.message && !placed) {
+      gestures?.setHint(event.message);
     }
     if (debug.isEnabled()) {
       debug.tickNative({
         tracking: event.state,
         message: event.message ?? "—",
-        placed,
+        placed: placed ? 1 : 0,
         backend: snapshot.platform === "ios" ? "arkit" : "arcore",
       });
     }
+  });
+
+  const placedListener = await CubeAR.addListener("placed", () => {
+    placed = true;
+    spawning = true;
+    gestures?.setPlacedUi(true);
+    debug.logEvent("cube placed");
+    window.clearTimeout(spawnTimer);
+    spawnTimer = window.setTimeout(() => {
+      spawning = false;
+    }, 900);
   });
 
   const sessionEnded = new Promise<void>((resolve) => {
     void CubeAR.addListener("sessionEnded", () => resolve());
   });
 
-  const onTap = async (event: PointerEvent) => {
-    const target = event.target as HTMLElement | null;
-    if (target?.closest(".ar-exit, .ar-debug-toggle, .ar-debug-col, .ar-debug-rail")) return;
-
-    // ARCore hit-test expects view pixels; CSS client coords need devicePixelRatio.
-    const dpr = window.devicePixelRatio || 1;
-    try {
-      const result = await CubeAR.onScreenTap({
-        x: event.clientX * dpr,
-        y: event.clientY * dpr,
-      });
-      if (result.placed) {
-        placed = result.count;
-        overlay.count.textContent = String(placed);
-        overlay.hint.hidden = true;
-        debug.logEvent(`cube placed (#${placed})`);
+  gestures = bindArGestures(chrome, {
+    cameraMode: true,
+    isPlaced: () => placed,
+    isSurfaceReady: () => surfaceReady,
+    isSpawning: () => spawning,
+    getScale: () => scale,
+    setScaleState: (f) => {
+      scale = f;
+    },
+    onTapPlace: async (clientX, clientY) => {
+      const dpr = window.devicePixelRatio || 1;
+      const isAndroid = Capacitor.getPlatform() === "android";
+      try {
+        const result = await CubeAR.onScreenTap({
+          x: isAndroid ? clientX * dpr : clientX,
+          y: isAndroid ? clientY * dpr : clientY,
+        });
+        if (result.placed) {
+          placed = true;
+          spawning = true;
+          window.clearTimeout(spawnTimer);
+          spawnTimer = window.setTimeout(() => {
+            spawning = false;
+          }, 900);
+          debug.logEvent("cube placed");
+        }
+        return result.placed;
+      } catch {
+        debug.logEvent("tap failed");
+        return false;
       }
-    } catch {
-      debug.logEvent("tap failed");
-    }
-  };
-
-  document.addEventListener("pointerdown", onTap);
-
-  const onExit = async () => {
-    overlay.exit.disabled = true;
-    try {
-      await CubeAR.stopSession();
-    } catch {
-      // session may already be torn down
-    }
-  };
-  overlay.exit.addEventListener("click", onExit);
+    },
+    onRotate: (dx, dy) => {
+      void CubeAR.rotate({ dx, dy });
+    },
+    onScale: (factor) => {
+      void CubeAR.setScale({ factor });
+    },
+    onMoveScreen: (clientX, clientY) => {
+      const dpr = window.devicePixelRatio || 1;
+      const isAndroid = Capacitor.getPlatform() === "android";
+      void CubeAR.moveScreen({
+        x: isAndroid ? clientX * dpr : clientX,
+        y: isAndroid ? clientY * dpr : clientY,
+      });
+    },
+    onReposition: async () => {
+      await CubeAR.reposition();
+      placed = false;
+      scale = 1;
+      gestures?.setHint("TAP A FLAT SURFACE");
+      debug.logEvent("reposition");
+    },
+    onRecenter: async () => {
+      await CubeAR.recenter();
+      debug.logEvent("recenter");
+    },
+    onExit: async () => {
+      try {
+        await CubeAR.stopSession();
+      } catch {
+        // session may already be torn down
+      }
+    },
+  });
 
   try {
     stopPreview();
     await CubeAR.startSession({
       cubeSizeM: CUBE_SIZE,
       colorHex: CUBE_COLOR_HEX,
+      ...(technique !== "place" ? { technique } : {}),
     });
-    document.body.classList.add("ar-native-active");
-    overlay.root.hidden = false;
+    setNativeActive(true);
+    chrome.root.hidden = false;
     await sessionEnded;
   } finally {
-    document.removeEventListener("pointerdown", onTap);
-    overlay.exit.removeEventListener("click", onExit);
-    overlay.exit.disabled = false;
+    window.clearTimeout(spawnTimer);
+    gestures.destroy();
     trackingListener.remove();
+    placedListener.remove();
     await CubeAR.removeAllListeners();
-    document.body.classList.remove("ar-native-active");
+    setNativeActive(false);
     unwireDebug();
-    resetDebugOverlay(overlay.debugToggle, overlay.debugPanel);
+    resetDebugOverlay(chrome.debugToggle, chrome.debugPanel);
     debug.logEvent("native session end");
     const previewHost = document.getElementById("preview");
     if (previewHost) {

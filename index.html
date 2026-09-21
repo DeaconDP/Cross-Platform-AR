@@ -12,13 +12,13 @@
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="apple-touch-icon" href="/icon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <title>Cube AR — tap to place a cube in your room</title>
+    <title>Cube AR — place and manipulate a cube in your room</title>
   </head>
   <body>
     <main class="shell">
       <header class="brand">
         <h1>Cube<em>AR</em></h1>
-        <p class="tagline">Tap to place a cube in your room.</p>
+        <p class="tagline">Place one cube, then rotate, scale, and move it.</p>
       </header>
 
       <div id="preview" class="preview" aria-label="3D preview of the cube"></div>
@@ -29,15 +29,20 @@
       </footer>
     </main>
 
-    <!-- WebXR dom-overlay chrome (Android AR session) -->
+    <!-- Shared AR session chrome (native + WebXR) -->
     <div id="ar-overlay" hidden>
-      <div class="ar-chip"><span id="cube-count">0</span> placed</div>
+      <div id="ar-stage" class="ar-stage" aria-hidden="true"></div>
+      <div class="ar-chip"><span id="ar-status">Scanning</span></div>
       <button id="debug-toggle" class="ar-debug-toggle" type="button" aria-pressed="false">
         Debug
       </button>
       <div id="debug-panel" class="ar-debug-hud-root" hidden aria-live="polite"></div>
       <p id="ar-hint" class="ar-hint"></p>
-      <button id="exit-ar" class="ar-exit">Exit AR</button>
+      <div id="ar-toolbar" class="ar-toolbar" hidden>
+        <button id="ar-reposition" class="ar-tool" type="button" disabled>Reposition</button>
+        <button id="ar-recenter" class="ar-tool" type="button" disabled>Recentre</button>
+      </div>
+      <button id="exit-ar" class="ar-exit" type="button">Exit AR</button>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

@@ -10,6 +10,24 @@ export class CubeARWeb extends WebPlugin {
         // no-op
     }
     async onScreenTap(_options) {
-        return { placed: false, count: 0 };
+        return { placed: false };
+    }
+    async moveScreen(_options) {
+        return { moved: false };
+    }
+    async reposition() {
+        // no-op
+    }
+    async recenter() {
+        // no-op
+    }
+    async rotate(_options) {
+        // no-op
+    }
+    async setScale(_options) {
+        // no-op
+    }
+    async debugPlaceFront() {
+        return { placed: false, error: "unavailable" };
     }
 }

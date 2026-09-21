@@ -1,16 +1,17 @@
 # Cube AR
 
-Cross-platform Augmented Reality demo: tap to place a 3D cube in your room. One PWA codebase, optional Capacitor shells for iOS/Android packaging.
+Cross-platform Augmented Reality demo: place one 3D cube in your room, then rotate, scale, and move it. One PWA codebase, optional Capacitor shells for iOS/Android packaging.
 
-This project is a **showcase of cross-platform AR options** — every supported path is listed on the landing screen with a short label explaining how it works.
+This project is a **showcase of cross-platform AR options** — every supported path is listed on the landing screen with a short label explaining how it works. Placement/manipulate UX matches Cradle of Humankind 2026 (Instant Placement, shared gestures).
 
 ## AR paths explained
 
 | Path | Where | How it works |
 | --- | --- | --- |
-| **Native · ARKit** | Capacitor iOS app | In-app ARKit session via a Capacitor plugin — camera + plane detection + tap-to-place without leaving the app |
-| **Native · ARCore** | Capacitor Android app | In-app ARCore session (SceneView) — same tap-to-place flow inside the app shell |
-| **WebXR · Chrome** | Android Chrome (browser or after Chrome handoff) | WebXR `immersive-ar` + hit-testing — reticle tracks surfaces, taps place cubes |
+| **Native · ARKit** | Capacitor iOS app | In-app ARKit — plane cascade + single cube place/manipulate (place-only) |
+| **Native · ARCore** | Capacitor Android app | In-app ARCore (SceneView) — Instant Placement + single cube place/manipulate |
+| **Native · ARCore techniques** | Capacitor Android app only | Feature points, depth peek, light estimate, image marker, and face mesh. Five teaching sessions via `technique` on `CubeAR.startSession`. iOS native stays place-only. |
+| **WebXR · Chrome** | Android Chrome (browser or after Chrome handoff) | WebXR `immersive-ar` + offsetRay hit-test — place one cube, then manipulate |
 | **WebXR · Chrome handoff** | Capacitor Android app | System WebView **cannot** run WebXR AR — opens the HTTPS PWA in Chrome Custom Tabs for the WebXR path |
 | **Quick Look · USDZ** | iPhone / iPad Safari or Cap shell | Runtime USDZ export via three.js — opens Apple's native AR Quick Look viewer |
 | **Inline preview** | Desktop / any browser | Orbit-controls 3D preview of the same cube definition |
@@ -34,7 +35,7 @@ The app runs at **https://localhost:5188** (sticky port, strict — it will not 
 1. Start the dev server (`run.bat` / `run.command`). Vite prints a `Network:` URL like `https://192.168.x.x:5188`.
 2. Make sure the phone is on the same Wi-Fi network (and the OS firewall allows Node on port 5188).
 3. Open that URL on the phone and accept the self-signed certificate warning (Advanced → Proceed).
-4. **Android Chrome:** tap **Start WebXR AR**, allow camera, sweep until the green reticle appears, tap to place cubes. Requires an [ARCore-capable device](https://developers.google.com/ar/devices).
+4. **Android Chrome:** tap **Start WebXR AR**, allow camera, move until ready, tap a flat surface to place one cube, then swipe/pinch. Requires an [ARCore-capable device](https://developers.google.com/ar/devices).
 5. **iPhone Safari:** tap **View in AR** — AR Quick Look opens; move the phone to find a surface.
 
 ### Desktop testing of the Android path
@@ -85,10 +86,12 @@ In Xcode → **Signing & Capabilities**, select the Apple Developer team for **d
 
 - `src/main.ts` — capability probe + multi-path showcase landing
 - `src/scene.ts` — shared cube definition + inline preview
+- `src/ar-gestures.ts` — shared overlay gesture controller (place / rotate / scale / move)
 - `src/ar-native.ts` — Capacitor native AR session (ARKit / ARCore)
-- `src/ar-webxr.ts` — WebXR session (hit-test reticle, tap to place)
+- `src/ar-webxr.ts` — WebXR session (offsetRay place/move, single-cube manipulate)
 - `src/ar-quicklook.ts` — iOS USDZ export + Quick Look launch
 - `src/ar-debug.ts` — session debug overlay (WebXR + native)
+- `src/emerge.ts` — place emerge timing shared with native plugins
 - `plugins/cube-ar/` — local Capacitor plugin (Swift + Kotlin); Android ARCore API map in [`plugins/cube-ar/android/ARCORE_API.md`](plugins/cube-ar/android/ARCORE_API.md)
 - `public/` — PWA manifest, icons, service worker
 - `android/` / `ios/` — Capacitor shells

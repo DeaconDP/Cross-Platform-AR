@@ -12,8 +12,18 @@
 - [x] Native AR Cap plugin (ARKit iOS + ARCore Android) + showcase multi-path landing
 - [x] Android native AR: runtime CAMERA permission + ARCore install gate before session start
 - [x] Android 16 KB page size: arsceneview 2.3.0 + 16k Gradle packaging (Filament/ARCore native libs)
-- [ ] Verify on a real ARCore Android phone over LAN (browser WebXR)
+- [x] CoH parity: Instant Placement + single-cube place/manip (rotate/scale/move/reposition/recenter)
+- [x] CoH parity: WebXR offsetRay place/move + shared overlay gesture chrome
+- [x] CoH parity: `is-ar-native` transparent WebView hardening + `debugPlaceFront`
+- [x] Android technique parity: feature points (`points`)
+- [x] Android technique parity: depth peek (`depth`)
+- [x] Android technique parity: light estimate (`light`)
+- [x] Android technique parity: image marker (`image`)
+- [x] Android technique parity: face mesh (`face`)
+- [ ] Android technique parity: device QA on ARCore phone (points / depth / light / image / face)
+- [ ] Verify on a real ARCore Android phone over LAN (browser WebXR place + manipulate)
 - [x] Verify Capacitor Android native AR path (ARCore tap-to-place) — IMU warmup + HIGH_SAMPLING_RATE_SENSORS; live camera on SM-A266B (Samsung sensor HAL / ARCore 1.54)
+- [ ] Verify Capacitor Android Instant Placement + post-place manip on device
 - [ ] Verify Capacitor Android build opens Chrome with VITE_AR_ORIGIN
-- [ ] Verify on a real iPhone (Safari Quick Look + Cap native ARKit + Cap Quick Look)
+- [ ] Verify on a real iPhone (Safari Quick Look + Cap native ARKit place/manip + Cap Quick Look)
 - [ ] Set Xcode DEVELOPMENT_TEAM to d@worldbuild.io team ID and run on device
