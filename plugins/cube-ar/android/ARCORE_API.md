@@ -157,16 +157,17 @@ sequenceDiagram
   Plugin->>Plugin: ArCoreApk.requestInstall
   Plugin->>SV: attach + configureSession
   SV-->>Plugin: onSessionUpdated(frame)
-  Plugin->>Frame: hitTest(center) for reticle
+  Plugin->>Frame: hitTest / hitTestInstantPlacement for reticle + place
   Web->>Plugin: onScreenTap(x, y)
-  Plugin->>Frame: hitTest(x, y) filter Plane
+  Plugin->>Frame: plane hitTest then Instant Placement ~1 m
   Plugin->>Anchor: hit.createAnchor()
-  Plugin->>SV: AnchorNode + CubeNode
-  Plugin-->>Web: placed, count
+  Plugin->>SV: single AnchorNode + CubeNode
+  Plugin-->>Web: placed
+  Web->>Plugin: rotate / setScale / moveScreen / recenter / reposition
 ```
 
 ---
 
 ## Summary
 
-**Today the plugin uses ~12% of the public `com.google.ar.core` surface** — focused on availability/install, basic session config, plane hit-testing, anchors, and tracking state. The majority of the package (Cloud Anchors, Geospatial, Depth, Instant Placement, semantics, recording, augmented images/faces) is unused but documented above for future expansion.
+**Today the plugin uses Instant Placement (`LOCAL_Y_UP`), optional Depth AUTOMATIC, horizontal plane finding, hit-testing, anchors, and tracking state** — roughly the CoH Visualiser subset of ARCore. Still unused: Cloud Anchors, Geospatial, semantics, recording, augmented images/faces.

@@ -116,16 +116,38 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.18);
 }
 
+/* Transparent WebView over native AR camera (CoH is-ar-native parity). */
+html.is-ar-native,
+body.is-ar-native,
 body.ar-native-active {
   background: transparent !important;
 }
 
+html.is-ar-native body,
+body.is-ar-native,
+body.ar-native-active {
+  background: transparent !important;
+}
+
+html.is-ar-native .shell,
+html.is-ar-native .preview,
+body.is-ar-native .shell,
+body.is-ar-native .preview,
 body.ar-native-active .shell,
 body.ar-native-active .preview {
   opacity: 0;
   pointer-events: none;
+  visibility: hidden;
 }
 
+html.is-ar-native .preview canvas,
+body.is-ar-native .preview canvas,
+body.ar-native-active .preview canvas {
+  display: none !important;
+}
+
+html.is-ar-native #ar-overlay,
+body.is-ar-native #ar-overlay,
 body.ar-native-active #ar-overlay {
   pointer-events: none;
 }
@@ -188,22 +210,33 @@ body.ar-native-active #ar-overlay {
   gap: 14px;
   padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px
     calc(env(safe-area-inset-bottom, 0px) + 24px);
+  z-index: 20;
 }
 
 #ar-overlay[hidden] {
   display: none;
 }
 
+.ar-stage {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  touch-action: none;
+  z-index: 0;
+}
+
 .ar-chip {
   position: absolute;
   top: calc(env(safe-area-inset-top, 0px) + 16px);
   left: 16px;
+  z-index: 2;
   padding: 8px 14px;
   border-radius: 999px;
   background: rgba(11, 13, 16, 0.65);
   backdrop-filter: blur(8px);
   font-size: 0.875rem;
   font-weight: 600;
+  pointer-events: none;
 }
 
 .ar-chip span {
@@ -211,19 +244,59 @@ body.ar-native-active #ar-overlay {
 }
 
 .ar-hint {
+  position: relative;
+  z-index: 2;
   padding: 8px 16px;
   border-radius: 999px;
   background: rgba(11, 13, 16, 0.65);
   backdrop-filter: blur(8px);
   font-size: 0.9rem;
   color: var(--text);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  pointer-events: none;
 }
 
 .ar-hint[hidden] {
   display: none;
 }
 
+.ar-toolbar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.ar-toolbar[hidden] {
+  display: none;
+}
+
+.ar-tool {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 18px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius);
+  background: rgba(11, 13, 16, 0.65);
+  backdrop-filter: blur(8px);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ar-tool:disabled,
+.ar-tool[aria-busy="true"] {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .ar-exit {
+  position: relative;
+  z-index: 2;
   pointer-events: auto;
   min-height: 48px;
   padding: 0 28px;

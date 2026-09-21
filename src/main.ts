@@ -4,22 +4,21 @@ import { Browser } from "@capacitor/browser";
 import { startPreview } from "./scene";
 import { isWebXRSupported, startWebXR } from "./ar-webxr";
 import { isQuickLookSupported, prepareQuickLook } from "./ar-quicklook";
-import { isNativeARSupported, nativeARErrorMessage, startNativeAR } from "./ar-native";
+import {
+  isNativeARSupported,
+  nativeARErrorMessage,
+  startNativeAR,
+} from "./ar-native";
+import type { CubeARTechnique } from "cube-ar";
 import { buildCompatSnapshot } from "./ar-debug";
+import { readOverlayChrome } from "./ar-gestures";
 
 const $ = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
 
 const pathsRoot = $("ar-paths");
 const status = $("status");
-const overlay = {
-  root: $("ar-overlay"),
-  count: $("cube-count"),
-  hint: $("ar-hint"),
-  exit: $<HTMLButtonElement>("exit-ar"),
-  debugToggle: $<HTMLButtonElement>("debug-toggle"),
-  debugPanel: $("debug-panel"),
-};
+const overlay = readOverlayChrome();
 
 startPreview($("preview"));
 
@@ -124,7 +123,7 @@ async function init(): Promise<void> {
         id: "native",
         label: `Native · ${backendLabel}`,
         title: "Start native AR",
-        detail: "In-app ARKit/ARCore session with tap-to-place cubes.",
+        detail: "In-app ARKit/ARCore — place one cube, then rotate, scale, move.",
         run: async () => {
           const snapshot = buildCompatSnapshot({
             arPath: "native",
@@ -145,6 +144,73 @@ async function init(): Promise<void> {
         },
       }),
     );
+
+    if (native.supported && native.backend === "arcore") {
+      const androidTechniques: {
+        id: string;
+        technique: CubeARTechnique;
+        title: string;
+        detail: string;
+      }[] = [
+        {
+          id: "native-points",
+          technique: "points",
+          title: "Feature points",
+          detail: "ARCore point cloud under the cube session.",
+        },
+        {
+          id: "native-depth",
+          technique: "depth",
+          title: "Depth peek",
+          detail: "ARCore depth heatmap. Needs a depth-capable phone.",
+        },
+        {
+          id: "native-light",
+          technique: "light",
+          title: "Light estimate",
+          detail: "Ambient intensity drives the cube light.",
+        },
+        {
+          id: "native-image",
+          technique: "image",
+          title: "Image marker",
+          detail: "Print the bundled marker about 16 cm wide.",
+        },
+        {
+          id: "native-face",
+          technique: "face",
+          title: "Face mesh",
+          detail: "Front camera face mesh and a cube on the nose.",
+        },
+      ];
+
+      for (const row of androidTechniques) {
+        paths.push({
+          id: row.id,
+          label: `Native · ARCore · ${row.title}`,
+          title: row.title,
+          detail: row.detail,
+          run: async () => {
+            const snapshot = buildCompatSnapshot({
+              arPath: "native",
+              webxrSupported,
+              quickLookSupported,
+              arOrigin: origin,
+            });
+            setPathBusy(row.id, true, "Starting camera\u2026");
+            try {
+              await startNativeAR(overlay, snapshot, row.technique);
+              setStatus("Native AR session ended \u2014 pick another path anytime.");
+            } catch (err) {
+              setStatus(nativeARErrorMessage(err), true);
+            } finally {
+              overlay.root.hidden = true;
+              resetPathButton(row.id, row.title);
+            }
+          },
+        });
+      }
+    }
   }
 
   if (webxrSupported) {
@@ -153,7 +219,7 @@ async function init(): Promise<void> {
         id: "webxr",
         label: "WebXR · Chrome",
         title: "Start WebXR AR",
-        detail: "immersive-ar + hit-test in the browser.",
+        detail: "immersive-ar + hit-test — place one cube, then manipulate.",
         run: async () => {
           const snapshot = buildCompatSnapshot({
             arPath: "webxr",
